@@ -38,7 +38,7 @@ Changelog = "https://github.com/allenai/pdelfin/blob/main/CHANGELOG.md"
 [project.optional-dependencies]
 dev = [
     "ruff",
-    "mypy>=1.0,<1.5",
+    "mypy>=1.0,<1.12",
     "black>=23.0,<24.0",
     "isort>=5.12,<5.13",
     "pytest",
