@@ -51,7 +51,7 @@ Changelog = "https://github.com/allenai/pdelfin/blob/main/CHANGELOG.md"
 dev = [
     "ruff",
     "mypy>=1.0,<1.5",
-    "black>=23.0,<24.0",
+    "black>=23.0,<25.0",
     "isort>=5.12,<5.13",
     "pytest",
     "pytest-sphinx",
