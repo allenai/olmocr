@@ -34,7 +34,7 @@ dependencies = [
   "orjson",
   "requests",
   "zstandard",
-  "aiohttp>=3.10,<3.11", # Specific timeout thing is causing issues
+  "aiohttp>=3.10,<3.12", # Specific timeout thing is causing issues
   "boto3",
   "torch>=2.4.0",
   "transformers>=4.46.2",
