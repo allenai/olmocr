@@ -166,7 +166,7 @@ class MolmoProcessor(ProcessorMixin):
         )
 
         # Prepend BOS
-        # qwen2 and olmo do not have a BOS, and instead use EOS as a generic seperator token.
+        # qwen2 and olmo do not have a BOS, and instead use EOS as a generic separator token.
         bos = self.tokenizer.bos_token_id or self.tokenizer.eos_token_id
         decoder_input_tokens = np.pad(out["input_ids"], [[1, 0]], constant_values=bos)
         out["input_ids"] = decoder_input_tokens
