@@ -58,47 +58,60 @@ def query_infinigram(ngram, index="v4_rpj_llama_s4", retries=3):
 def process_document(doc, tokenizer, ngram_size, num_samples, index="v4_rpj_llama_s4"):
     """
     Tokenizes the document using the Llama2 tokenizer and samples random n-grams.
-    Each n-gram is chosen such that:
-      1. It starts on a word-split boundary (using the offset mapping and a check on the preceding character).
-      2. Its decoded string contains only alphanumeric characters, spaces, and the punctuation marks ".,!?()".
+    Each n-gram is chosen randomly from the document and filtered to ensure:
+      1. It contains only alphanumeric characters, spaces, and basic punctuation ".,!?()".
+      2. It has sufficient content (not just whitespace or very short phrases).
 
     Each valid n-gram is then queried using the infini-gram API.
-    The function returns the document id, the number of matching n-grams (i.e. API count > 0),
-    the total number of valid n-grams sampled, and a list of tuples (flag, ngram_string).
+    
+    Returns:
+        tuple: (document_id, match_count, sample_count, valid_ngram_details)
+            - document_id: ID of the processed document
+            - match_count: Number of n-grams that matched in the index (count > 0)
+            - sample_count: Total number of valid n-grams sampled
+            - valid_ngram_details: List of tuples (flag, ngram_string)
     """
     text = doc.get("text", "")
     doc_id = doc.get("id", "Unknown")
-    # Get tokenized representation with offset mapping to determine word boundaries.
-    tokenized = tokenizer(text, add_special_tokens=False, return_offsets_mapping=True)
-    token_ids = tokenized["input_ids"]
-    # offsets = tokenized["offset_mapping"]
+    
+    # Get tokenized representation
+    token_ids = tokenizer(text, add_special_tokens=False)["input_ids"]
 
     if len(token_ids) < ngram_size:
         return doc_id, 0, 0, []
 
-    # Determine valid starting indices based on word-split boundaries.
-    valid_positions = []
-    # for i in range(len(token_ids) - ngram_size + 1):
-    #     start_offset = offsets[i][0]
-    #     if start_offset == 0 or (start_offset > 0 and text[start_offset - 1] == " "):
-    #         valid_positions.append(i)
-
+    # All possible positions where an n-gram can start
+    valid_positions = list(range(len(token_ids) - ngram_size + 1))
     if not valid_positions:
-        # Fallback: if no valid positions are found, use all possible positions.
-        valid_positions = list(range(len(token_ids) - ngram_size + 1))
+        return doc_id, 0, 0, []
 
     valid_ngram_details = []
     attempts = 0
-    max_attempts = num_samples * 10  # Limit to prevent infinite loops.
+    max_attempts = num_samples * 10  # Limit to prevent infinite loops
+    min_content_length = ngram_size * 3  # Minimum content length threshold
+    
+    # Use set to track already processed n-grams to avoid duplicates
+    processed_ngrams = set()
+    
     while len(valid_ngram_details) < num_samples and attempts < max_attempts:
         idx = random.choice(valid_positions)
-        ngram_token_ids = token_ids[idx : idx + ngram_size]
+        ngram_token_ids = token_ids[idx:idx + ngram_size]
         ngram_str = tokenizer.decode(ngram_token_ids, clean_up_tokenization_spaces=True)
-        # Only accept n-grams that contain only allowed characters.
-        if ALLOWED_RE.fullmatch(ngram_str) and len(ngram_str.strip()) > ngram_size * 3:
+        
+        # Skip if we've already processed this n-gram
+        if ngram_str in processed_ngrams:
+            attempts += 1
+            continue
+            
+        processed_ngrams.add(ngram_str)
+        
+        # Only accept n-grams that contain only allowed characters and have sufficient content
+        stripped_ngram = ngram_str.strip()
+        if ALLOWED_RE.fullmatch(ngram_str) and len(stripped_ngram) > min_content_length:
             count = query_infinigram(ngram_str, index=index)
             flag = "YES" if count > 0 else "NO"
             valid_ngram_details.append((flag, ngram_str))
+        
         attempts += 1
 
     match_count = sum(1 for flag, _ in valid_ngram_details if flag == "YES")
