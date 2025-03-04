@@ -35,7 +35,7 @@ dependencies = [
   "zstandard",
   "boto3",
   "httpx",
-  "torch>=2.5.1",
+  "torch>=2.4.0,<2.5.0",
   "transformers>=4.46.2",
   "beaker-py",
 ]
