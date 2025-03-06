@@ -1,33 +1,34 @@
-import argparse
-import asyncio
-import atexit
-import base64
-import datetime
-import hashlib
-import json
-import logging
-import multiprocessing
 import os
-import random
 import re
-import shutil
 import sys
-import tempfile
 import time
-from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
-from concurrent.futures.process import BrokenProcessPool
-from dataclasses import dataclass
-from functools import cache, partial
-from io import BytesIO
-from urllib.parse import urlparse
-
+import json
 import boto3
 import httpx
 import torch
-from botocore.exceptions import ClientError
+import random
+import atexit
+import base64
+import shutil
+import asyncio
+import hashlib
+import logging
+import argparse
+import datetime
+import tempfile
+import multiprocessing
+
+from io import BytesIO
 from PIL import Image
-from pypdf import PdfReader
 from tqdm import tqdm
+from pypdf import PdfReader
+from functools import cache, partial
+from dataclasses import dataclass
+from urllib.parse import urlparse
+from botocore.exceptions import ClientError
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
+from concurrent.futures.process import BrokenProcessPool
+
 
 from olmocr.check import (
     check_poppler_version,
