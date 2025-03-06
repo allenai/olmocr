@@ -1,10 +1,11 @@
+import os
 import abc
+import random
 import asyncio
-import datetime
 import hashlib
 import logging
-import os
-import random
+import datetime
+
 from asyncio import Queue
 from dataclasses import dataclass
 from typing import Any, List, Optional
@@ -223,14 +224,14 @@ class LocalWorkQueue(WorkQueue):
                 existing_groups[group_hash] = group_paths
 
         existing_path_set = {p for paths in existing_groups.values() for p in paths}
-        new_paths = all_paths - existing_path_set
+        new_paths         = all_paths - existing_path_set
         logger.info(f"{len(new_paths):,} new paths to add to the workspace")
 
         if not new_paths:
             return
 
         # Create new work groups
-        new_groups = []
+        new_groups    = []
         current_group = []
         for path in sorted(new_paths):
             current_group.append(path)
@@ -435,7 +436,7 @@ class S3WorkQueue(WorkQueue):
             return
 
         # Create new work groups
-        new_groups = []
+        new_groups    = []
         current_group = []
         for path in sorted(new_paths):
             current_group.append(path)
@@ -503,7 +504,7 @@ class S3WorkQueue(WorkQueue):
             True if the work is completed, False otherwise
         """
         output_s3_path = os.path.join(self.workspace_path, "results", f"output_{work_hash}.jsonl")
-        bucket, key = parse_s3_path(output_s3_path)
+        bucket, key    = parse_s3_path(output_s3_path)
 
         try:
             await asyncio.to_thread(self.s3_client.head_object, Bucket=bucket, Key=key)
