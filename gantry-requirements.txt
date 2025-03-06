@@ -1,4 +1,4 @@
-torchvision
+#torchvision
 cached-path
 smart_open
 pypdf
@@ -30,6 +30,6 @@ peft
 wandb
 omegaconf
 s3fs
-transformers>=4.45.1
+#transformers>=4.45.1
 bitsandbytes
 ftfy
