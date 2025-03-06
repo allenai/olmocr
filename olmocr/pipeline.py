@@ -29,7 +29,6 @@ from botocore.exceptions import ClientError
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 from concurrent.futures.process import BrokenProcessPool
 
-
 from olmocr.check import (
     check_poppler_version,
     check_sglang_version,
@@ -76,7 +75,7 @@ logging.getLogger("pypdf").setLevel(logging.ERROR)
 
 # Global s3 clients fo the whole script, we have two separate ones in case your workspace and your pdfs are in different accounts
 workspace_s3 = boto3.client("s3")
-pdf_s3 = boto3.client("s3")
+pdf_s3       = boto3.client("s3")
 
 # Global variables for token statistics
 metrics = MetricsKeeper(window=60 * 5)
@@ -212,11 +211,11 @@ async def apost(url, json_data):
 
 async def process_page(args, worker_id: int, pdf_orig_path: str, pdf_local_path: str, page_num: int) -> PageResult:
     COMPLETION_URL = f"http://localhost:{SGLANG_SERVER_PORT}/v1/chat/completions"
-    MAX_RETRIES = args.max_page_retries
+    MAX_RETRIES    = args.max_page_retries
 
-    exponential_backoffs = 0
+    exponential_backoffs  = 0
     local_anchor_text_len = args.target_anchor_text_len
-    local_image_rotation = 0
+    local_image_rotation  = 0
     attempt = 0
     await tracker.track_work(worker_id, f"{pdf_orig_path}-{page_num}", "started")
 
@@ -337,7 +336,7 @@ async def process_pdf(args, worker_id: int, pdf_orig_path: str):
             return None
 
         # List to hold the tasks for processing each page
-        page_tasks = []
+        page_tasks   = []
         page_results = []
 
         try:
@@ -378,8 +377,8 @@ async def process_pdf(args, worker_id: int, pdf_orig_path: str):
 
 def build_dolma_document(pdf_orig_path, page_results):
     # Build the document text and page spans
-    document_text = ""
-    pdf_page_spans = []
+    document_text    = ""
+    pdf_page_spans   = []
     current_char_pos = 0
 
     for index, page_result in enumerate(page_results):
@@ -596,8 +595,8 @@ async def sglang_server_task(args, semaphore):
             pass  # Clean up if the task is cancelled
 
     # Start tasks to read stdout, stderr, and handle timeout logic
-    stdout_task = asyncio.create_task(read_stream(proc.stdout))
-    stderr_task = asyncio.create_task(read_stream(proc.stderr))
+    stdout_task  = asyncio.create_task(read_stream(proc.stdout))
+    stderr_task  = asyncio.create_task(read_stream(proc.stderr))
     timeout_task = asyncio.create_task(timeout_task())
 
     try:
@@ -629,7 +628,7 @@ async def sglang_server_host(args, semaphore):
 
 async def sglang_server_ready():
     max_attempts = 300
-    delay_sec = 1
+    delay_sec    = 1
     url = f"http://localhost:{SGLANG_SERVER_PORT}/v1/models"
 
     for attempt in range(1, max_attempts + 1):
@@ -676,7 +675,7 @@ def submit_beaker_job(args):
 
     b = Beaker.from_env(default_workspace=args.beaker_workspace)
     account = b.account.whoami()
-    owner = account.name
+    owner   = account.name
     beaker_image = f"jakep/olmocr-inference-{VERSION}"
 
     task_name = f"olmocr-{os.path.basename(args.workspace.rstrip('/'))}"
@@ -773,26 +772,26 @@ def print_stats(args):
 
     # Get total work items and completed items
     index_file_s3_path = os.path.join(args.workspace, "work_index_list.csv.zstd")
-    output_glob = os.path.join(args.workspace, "results", "*.jsonl")
+    output_glob        = os.path.join(args.workspace, "results", "*.jsonl")
 
     done_work_items = expand_s3_glob(workspace_s3, output_glob)
-    work_queue = {parts[0]: parts[1:] for line in download_zstd_csv(workspace_s3, index_file_s3_path) if (parts := line.strip().split(",")) and line.strip()}
+    work_queue      = {parts[0]: parts[1:] for line in download_zstd_csv(workspace_s3, index_file_s3_path) if (parts := line.strip().split(",")) and line.strip()}
 
-    total_items = len(work_queue)
+    total_items     = len(work_queue)
     completed_items = len(done_work_items)
 
     def process_output_file(s3_path):
         try:
             data = get_s3_bytes(workspace_s3, s3_path)
             doc_count = 0
-            total_input_tokens = 0
+            total_input_tokens  = 0
             total_output_tokens = 0
             total_pages = 0
             total_fallback_pages = 0
             processed_paths = set()
 
             # Counters for long context docs within a single file
-            long_context_docs = 0
+            long_context_docs   = 0
             long_context_tokens = 0
 
             for line in data.decode("utf-8").splitlines():
@@ -831,15 +830,15 @@ def print_stats(args):
 
     print("\nProcessing output files...")
     docs_total = 0
-    input_tokens_total = 0
+    input_tokens_total  = 0
     output_tokens_total = 0
     pages_total = 0
     fallback_pages_total = 0
-    all_processed_paths = set()
-    original_paths = set()
+    all_processed_paths  = set()
+    original_paths       = set()
 
     # Counters for long context documents across all files
-    long_context_docs_count = 0
+    long_context_docs_count   = 0
     long_context_tokens_total = 0
 
     # First collect all original PDF paths
@@ -950,11 +949,11 @@ async def main():
 
     if args.workspace_profile:
         workspace_session = boto3.Session(profile_name=args.workspace_profile)
-        workspace_s3 = workspace_session.client("s3")
+        workspace_s3      = workspace_session.client("s3")
 
     if args.pdf_profile:
         pdf_session = boto3.Session(profile_name=args.pdf_profile)
-        pdf_s3 = pdf_session.client("s3")
+        pdf_s3      = pdf_session.client("s3")
 
     # We need poppler to load the initial pdfs, even if we are not processing them here
     check_poppler_version()
@@ -988,9 +987,9 @@ async def main():
         logger.info(f"Found {len(pdf_work_paths):,} total pdf paths to add")
 
         # Estimate average pages per pdf
-        sample_size = min(100, len(pdf_work_paths))
+        sample_size  = min(100, len(pdf_work_paths))
         sampled_pdfs = random.sample(list(pdf_work_paths), sample_size)
-        page_counts = []
+        page_counts  = []
 
         for pdf in tqdm(sampled_pdfs, desc="Sampling PDFs to calculate optimal length"):
             try:
