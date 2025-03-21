@@ -88,7 +88,7 @@ process_pool = ProcessPoolExecutor(max_workers=min(multiprocessing.cpu_count() /
 # Filter object, cached so it will only get loaded when/if you need it
 get_pdf_filter = cache(lambda: PdfFilter(languages_to_keep={Language.ENGLISH, None}, apply_download_spam_check=True, apply_form_check=True))
 
-SGLANG_SERVER_PORT = 30024
+SGLANG_SERVER_PORT = None
 
 
 @dataclass(frozen=True)
@@ -938,9 +938,13 @@ async def main():
     )
     parser.add_argument("--beaker_gpus", type=int, default=1, help="Number of gpu replicas to run")
     parser.add_argument("--beaker_priority", type=str, default="normal", help="Beaker priority level for the job")
+    parser.add_argument("--port", type=int, default=30024, help="Port to use for the SGLang server")
     args = parser.parse_args()
 
     global workspace_s3, pdf_s3
+    # set the global SGLANG_SERVER_PORT from args
+    global SGLANG_SERVER_PORT
+    SGLANG_SERVER_PORT = args.port
 
     # setup the job to work in beaker environment, load secrets, adjust logging, etc.
     if "BEAKER_JOB_NAME" in os.environ:
