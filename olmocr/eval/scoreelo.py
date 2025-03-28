@@ -1,3 +1,4 @@
+import os
 import csv
 import re
 from collections import defaultdict
@@ -286,6 +287,7 @@ def make_report(urls):
 
 if __name__ == "__main__":
     # Example usage
+    # AWS credentials should be provided via environment variables
     urls = [
         "https://jakep-tinyhost.s3.amazonaws.com/review_page_0-ff70abb8f517.html?AWSAccessKeyId=AKIASHLPW4FEVZOPGK46&Signature=NarEyyCfvusCh%2FHdB47VfHOnnBs%3D&Expires=1738359221",
         "https://jakep-tinyhost.s3.amazonaws.com/review_page_1-0800f9af46cf.html?AWSAccessKeyId=AKIASHLPW4FEVZOPGK46&Signature=ncTWAu5rSndBJJsU26HRYDaK6i8%3D&Expires=1738359222",
