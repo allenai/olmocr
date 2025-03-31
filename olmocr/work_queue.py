@@ -8,6 +8,7 @@ import random
 from asyncio import Queue
 from dataclasses import dataclass
 from typing import Any, List, Optional
+import json
 
 from olmocr.s3_utils import (
     download_zstd_csv,
@@ -264,10 +265,57 @@ class LocalWorkQueue(WorkQueue):
         work_queue_lines = await asyncio.to_thread(download_zstd_csv_local, self._index_path)
         work_queue = {parts[0]: parts[1:] for line in work_queue_lines if (parts := line.strip().split(",")) and line.strip()}
 
-        # 2) Determine which items are completed by scanning local results/*.jsonl
+        # 2) Determine which items are completed by scanning and loading local results/*.jsonl
         if not os.path.isdir(self._results_dir):
             os.makedirs(self._results_dir, exist_ok=True)
-        done_work_items = [f for f in os.listdir(self._results_dir) if f.startswith("output_") and f.endswith(".jsonl")]
+        existing_work_items = [f for f in os.listdir(self._results_dir) if f.startswith("output_") and f.endswith(".jsonl")]
+        done_work_items = []
+        for item in existing_work_items:
+            item_hash = item[len("output_"):-len(".jsonl")]
+            item_path = os.path.join(self._results_dir, item)
+            lock_file_path = os.path.join(self._locks_dir, item)
+            done_work_paths = []
+            try:
+                with open(item_path, 'r', encoding='utf-8') as f:
+                    for line in f:
+                        try:
+                            result = json.loads(line)
+                            done_pdf_orig_path = result.get('metadata', {}).get('Source-File')
+                            if done_pdf_orig_path:
+                                done_work_paths.append(done_pdf_orig_path)
+                            elif logger.isEnabledFor(logging.DEBUG):
+                                logger.debug(f"{item} did not contain any output (parsed) content")
+                        except json.JSONDecodeError as e:
+                            print(f"Error parsing line in {item}: {e}")
+                        except Exception as e:
+                            logger.warning(f"Error processing result: {e}")
+            except Exception as e:
+                print(f"Error opening {item}: {e}")
+                continue       
+            # Check if work is complete
+            if set(work_queue.get(item_hash)) == set(done_work_paths):
+                done_work_items.append(item)
+            else:
+                missing = set(work_queue.get(item_hash)) - set(done_work_paths)
+                logger.info(f"Work item with hash {item_hash} is not fully finished, re-running PDFs: {', '.join(missing)}")
+                try:
+                    os.remove(item_path)
+                    logger.info(f"Deleted output file: {item_path}")
+                except Exception as e:
+                    logger.warning(f"Error deleting {item_path}: {e}")
+                try:
+                    if os.path.exists(lock_file_path):
+                        os.remove(lock_file_path)
+                        logger.info(f"Deleted lock file: {lock_file_path}")
+                    else:
+                        logger.info(f"Lock file {lock_file_path} does not exist, skipping deletion")
+                except Exception as e:
+                    logger.warning(f"Error deleting lock file {lock_file_path}: {e}")
+                #TODO: check if pipeline writes output dolma_docs in mode 'w/w+' (overwrite) or 'a' (append)
+                # If it is 'a', we need to remove the corresponding path in work_queue to avoid repeating work
+                # work_queue[item_hash] = [path for path in missing if path not in done_work_paths]
+                    
+        # done_work_items = [f for f in os.listdir(self._results_dir) if f.startswith("output_") and f.endswith(".jsonl")]
         done_work_hashes = {fn[len("output_") : -len(".jsonl")] for fn in done_work_items}
 
         # 3) Filter out completed items
