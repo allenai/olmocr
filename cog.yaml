@@ -1,0 +1,16 @@
+build:
+  gpu: true
+  cuda: "12.1"
+  python_version: "3.11"
+  system_packages:
+    - "poppler-utils"
+  python_packages:
+    - torch==2.5.1
+    - transformers==4.46.2
+    - pillow==10.2.0
+    - olmocr==0.1.58
+
+  run:
+    - curl -o /usr/local/bin/pget -L "https://github.com/replicate/pget/releases/download/v0.8.2/pget_linux_x86_64" && chmod +x /usr/local/bin/pget
+
+predict: "predict.py:Predictor" 
