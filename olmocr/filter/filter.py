@@ -1,11 +1,12 @@
-import logging
 import re
+import logging
 import subprocess
-from collections import Counter
-from typing import List
 
-from lingua import Language, LanguageDetectorBuilder
+from typing import List
 from pypdf import PdfReader
+from collections import Counter
+from lingua import Language, LanguageDetectorBuilder
+
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
@@ -48,8 +49,8 @@ class PdfFilter:
             "ciprofloxacin",
         }
 
-        base_text = base_text.strip().lower()
-        clean_text = re.sub(r"\W+", " ", base_text)
+        base_text   = base_text.strip().lower()
+        clean_text  = re.sub(r"\W+", " ", base_text)
 
         word_counts = Counter(clean_text.split())
         total_words = len(clean_text.split())
@@ -153,12 +154,12 @@ if __name__ == "__main__":
     )
 
     # Output files
-    keep_path = "/home/ubuntu/s2pdf_paths_filter_keep.txt"
+    keep_path   = "/home/ubuntu/s2pdf_paths_filter_keep.txt"
     remove_path = "/home/ubuntu/s2pdf_paths_filter_remove.txt"
 
     max_pending = 20  # Limit on the number of concurrent futures
-    total_pdfs = len(s3_work_paths)
-    pdf_iter = iter(s3_work_paths)  # Iterator for PDFs
+    total_pdfs  = len(s3_work_paths)
+    pdf_iter    = iter(s3_work_paths)  # Iterator for PDFs
 
     # Process the PDFs with limited concurrent futures
     with open(keep_path, "w") as fkeep, open(remove_path, "w") as fremove:
@@ -169,7 +170,7 @@ if __name__ == "__main__":
                 # Submit initial batch of futures
                 for _ in range(min(max_pending, total_pdfs)):
                     s3_path = next(pdf_iter)
-                    future = executor.submit(process_pdf, s3_path)
+                    future  = executor.submit(process_pdf, s3_path)
                     pending_futures[future] = s3_path
 
                 while pending_futures:

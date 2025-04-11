@@ -1,6 +1,6 @@
 import re
-from dataclasses import dataclass
 from typing import Optional
+from dataclasses import dataclass
 
 
 # This is the prompt we use for getting chat gpt 4o to convert documents into our silver training data
