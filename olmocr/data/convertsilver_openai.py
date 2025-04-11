@@ -1,14 +1,16 @@
-import argparse
-import json
-import logging
+
 import os
 import re
 import sys
-from concurrent.futures import ProcessPoolExecutor, as_completed
-from pathlib import Path
 
+import json
+import logging
+import argparse
 import smart_open
+
+from pathlib import Path
 from cached_path import cached_path
+from concurrent.futures import ProcessPoolExecutor, as_completed
 
 
 def setup_logging():
@@ -30,7 +32,7 @@ def process_file(input_file: str, output_file: str, rewrite_prompt_str: bool):
         output_file (str): Path or URL to the output JSONL file.
     """
     processed_count = 0
-    error_count = 0
+    error_count     = 0
 
     try:
         with smart_open.open(input_file, "r", encoding="utf-8") as infile, smart_open.open(output_file, "w", encoding="utf-8") as outfile:
@@ -55,7 +57,7 @@ def process_file(input_file: str, output_file: str, rewrite_prompt_str: bool):
                         # Ok, now we want to try to see if it's better if we recalculate the anchor text
                         goldkey = obj["custom_id"]
                         s3_path = goldkey[: goldkey.rindex("-")]
-                        page = int(goldkey[goldkey.rindex("-") + 1 :])
+                        page    = int(goldkey[goldkey.rindex("-") + 1 :])
 
                         # Save the pdf to a temporary cache folder
                         local_pdf_path = cached_path(s3_path, quiet=True)
@@ -97,20 +99,20 @@ def construct_output_file_path(input_file_path, input_dir, output_dir):
 
     if is_s3_path(input_dir):
         # For S3 paths, manually construct the relative path based on the input S3 path
-        input_prefix = input_dir.split("s3://")[1]
-        input_prefix = input_prefix.rstrip("*")  # Remove any glob patterns like *.jsonl
+        input_prefix   = input_dir.split("s3://")[1]
+        input_prefix   = input_prefix.rstrip("*")  # Remove any glob patterns like *.jsonl
 
         # Remove the 's3://' part from input_file_path and extract the relative part
         input_file_key = input_file_path.split("s3://")[1]
-        relative_path = input_file_key[len(input_prefix) :].lstrip("/")
+        relative_path  = input_file_key[len(input_prefix) :].lstrip("/")
 
         # Construct the output S3 path by appending the relative part to the output S3 directory
         output_file_path = output_dir.rstrip("/") + "/" + relative_path
 
     else:
         # For local paths, use the existing relative path logic
-        input_dir_path = Path(input_dir)
-        relative_path = input_file.relative_to(input_dir_path)
+        input_dir_path   = Path(input_dir)
+        relative_path    = input_file.relative_to(input_dir_path)
         output_file_path = str(Path(output_dir) / relative_path)
 
     return output_file_path
@@ -129,20 +131,19 @@ def list_input_files(input_dir):
     """
     if is_s3_path(input_dir):
         # Use smart_open's s3 functionality to list files
+        import boto3
         import fnmatch
 
-        import boto3
-
         # Parse bucket and prefix
-        bucket_name = input_dir.split("s3://")[1].split("/")[0]
+        bucket_name      = input_dir.split("s3://")[1].split("/")[0]
         path_and_pattern = "/".join(input_dir.split("s3://")[1].split("/")[1:])
 
         # Separate the prefix and pattern
         if "/" in path_and_pattern:
-            prefix = path_and_pattern.rsplit("/", 1)[0] + "/"
+            prefix  = path_and_pattern.rsplit("/", 1)[0] + "/"
             pattern = path_and_pattern.rsplit("/", 1)[1]
         else:
-            prefix = ""
+            prefix  = ""
             pattern = path_and_pattern
 
         # Set up S3 resource and bucket
@@ -171,9 +172,9 @@ def main():
     parser.add_argument("--jobs", "-j", type=int, default=20, help="Number of parallel jobs to run (default: 20).")
     args = parser.parse_args()
 
-    input_dir = args.input_dir.rstrip("/")
+    input_dir  = args.input_dir.rstrip("/")
     output_dir = args.output_dir.rstrip("/")
-    max_jobs = args.jobs
+    max_jobs   = args.jobs
 
     if not output_dir.startswith("s3:"):
         os.makedirs(output_dir, exist_ok=True)

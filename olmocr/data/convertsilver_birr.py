@@ -1,23 +1,25 @@
-import argparse
-import json
-import logging
+
 import os
 import re
 import sys
-import tempfile
-from concurrent.futures import ProcessPoolExecutor, as_completed
-from pathlib import Path
-
+import json
 import boto3
+import logging
+import argparse
+import tempfile
+import smart_open
+
+from pathlib import Path
+from concurrent.futures import ProcessPoolExecutor, as_completed
+
 
 # Import Plotly for plotting
 import plotly.express as px
-import smart_open
 
-from olmocr.data.renderpdf import render_pdf_to_base64png
+
 from olmocr.prompts import build_finetuning_prompt
 from olmocr.prompts.anchor import get_anchor_text
-
+from olmocr.data.renderpdf import render_pdf_to_base64png
 
 def setup_logging():
     """Configure logging for the script."""
@@ -43,10 +45,10 @@ def download_pdf_from_s3(s3_path: str, pdf_profile: str) -> str:
     # Parse the bucket and key from the s3_path
     # s3_path format: s3://bucket_name/some/folder/file.pdf
     path_without_scheme = s3_path.split("s3://", 1)[1]
-    bucket_name, key = path_without_scheme.split("/", 1)
+    bucket_name, key    = path_without_scheme.split("/", 1)
 
     # Create a session with the specified profile or default
-    session = boto3.Session(profile_name=pdf_profile) if pdf_profile else boto3.Session()
+    session   = boto3.Session(profile_name=pdf_profile) if pdf_profile else boto3.Session()
     s3_client = session.client("s3")
 
     # Create a temporary local file
@@ -95,8 +97,8 @@ def process_file(input_file: str, output_file: str, rewrite_prompt_str: bool, pd
         pdf_profile (str): Boto3 profile to use when fetching PDFs from S3.
     """
     processed_count = 0
-    error_count = 0
-    prompt_lengths = []
+    error_count     = 0
+    prompt_lengths  = []
 
     try:
         with smart_open.open(input_file, "r", encoding="utf-8") as infile, smart_open.open(output_file, "w", encoding="utf-8") as outfile:
@@ -126,7 +128,7 @@ def process_file(input_file: str, output_file: str, rewrite_prompt_str: bool, pd
                         # page = everything after the dash
                         try:
                             s3_path = goldkey[: goldkey.rindex("-")]
-                            page = int(goldkey[goldkey.rindex("-") + 1 :])
+                            page    = int(goldkey[goldkey.rindex("-") + 1 :])
                         except (ValueError, IndexError) as e:
                             logging.error(f"Could not parse the page number from custom_id {goldkey}: {e}")
                             error_count += 1
@@ -154,7 +156,7 @@ def process_file(input_file: str, output_file: str, rewrite_prompt_str: bool, pd
                                 logging.error(f"Failed to remove temporary PDF file {local_pdf_path}: {remove_err}")
 
                 if transformed is not None:
-                    prompt_text = transformed["chat_messages"][0]["content"][0]["text"]
+                    prompt_text   = transformed["chat_messages"][0]["content"][0]["text"]
                     prompt_length = len(prompt_text)
 
                     if prompt_length > 6000:
@@ -197,15 +199,15 @@ def construct_output_file_path(input_file_path, input_dir, output_dir):
 
         # Remove the 's3://' part from input_file_path and extract the relative part
         input_file_key = input_file_path.split("s3://")[1]
-        relative_path = input_file_key[len(input_prefix) :].lstrip("/")
+        relative_path  = input_file_key[len(input_prefix) :].lstrip("/")
 
         # Construct the output S3 path by appending the relative part to the output S3 directory
         output_file_path = output_dir.rstrip("/") + "/" + relative_path
 
     else:
         # For local paths, use the existing relative path logic
-        input_dir_path = Path(input_dir)
-        relative_path = input_file.relative_to(input_dir_path)
+        input_dir_path   = Path(input_dir)
+        relative_path    = input_file.relative_to(input_dir_path)
         output_file_path = str(Path(output_dir) / relative_path)
 
     return output_file_path
@@ -231,10 +233,10 @@ def list_input_files(input_dir):
 
         # Separate the prefix and pattern
         if "/" in path_and_pattern:
-            prefix = path_and_pattern.rsplit("/", 1)[0] + "/"
+            prefix  = path_and_pattern.rsplit("/", 1)[0] + "/"
             pattern = path_and_pattern.rsplit("/", 1)[1]
         else:
-            prefix = ""
+            prefix  = ""
             pattern = path_and_pattern
 
         # Use a Boto3 session (no specific PDF profile needed here if only listing)
@@ -269,9 +271,9 @@ def main():
 
     args = parser.parse_args()
 
-    input_dir = args.input_dir.rstrip("/")
+    input_dir  = args.input_dir.rstrip("/")
     output_dir = args.output_dir.rstrip("/")
-    max_jobs = args.jobs
+    max_jobs   = args.jobs
 
     # List input files
     input_files = list_input_files(input_dir)

@@ -1,15 +1,15 @@
-import argparse
-import base64
-import glob
 import os
-import random
-from concurrent.futures import ProcessPoolExecutor, as_completed
-from typing import List
-from urllib.parse import urlparse
-
+import glob
 import boto3
-from pypdf import PdfReader, PdfWriter
+import random
+import base64
+import argparse
+
 from tqdm import tqdm
+from typing import List
+from pypdf import PdfReader, PdfWriter
+from urllib.parse import urlparse
+from concurrent.futures import ProcessPoolExecutor, as_completed
 
 from olmocr.data.renderpdf import render_pdf_to_base64png
 from olmocr.filter import PdfFilter
@@ -79,8 +79,8 @@ def process_pdf(pdf_path: str, first_n_pages: int, max_sample_pages: int, no_fil
     # Make sure we have an absolute path for the PDF name
     base_pdf_name = os.path.splitext(os.path.basename(pdf_path))[0]
 
-    reader = PdfReader(local_pdf_path)
-    num_pages = len(reader.pages)
+    reader        = PdfReader(local_pdf_path)
+    num_pages     = len(reader.pages)
 
     sampled_pages = sample_pdf_pages(num_pages, first_n_pages, max_sample_pages)
 
@@ -128,17 +128,17 @@ def main():
 
     # Reservoir sample for PDF paths
     pdf_paths = []
-    n = 0  # total number of items seen
+    n = 0               # total number of items seen
 
     # Either load from glob or from path_list
     if args.glob_path:
         if args.glob_path.startswith("s3://"):
             # Handle S3 globbing
-            parsed = urlparse(args.glob_path)
-            s3 = boto3.client("s3")
-            bucket_name = parsed.netloc
-            prefix = os.path.dirname(parsed.path.lstrip("/")) + "/"
-            paginator = s3.get_paginator("list_objects_v2")
+            parsed        = urlparse(args.glob_path)
+            s3            = boto3.client("s3")
+            bucket_name   = parsed.netloc
+            prefix        = os.path.dirname(parsed.path.lstrip("/")) + "/"
+            paginator     = s3.get_paginator("list_objects_v2")
             page_iterator = paginator.paginate(Bucket=bucket_name, Prefix=prefix)
 
             for page in page_iterator:
