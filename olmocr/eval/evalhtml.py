@@ -1,17 +1,17 @@
 import os
+import boto3
 import random
 import tempfile
-from concurrent.futures import ThreadPoolExecutor
-from difflib import SequenceMatcher
-from urllib.parse import urlparse
 
-import boto3
-from jinja2 import Template
 from tqdm import tqdm
+from jinja2 import Template
+from difflib import SequenceMatcher
+from concurrent.futures import ThreadPoolExecutor
 
+from urllib.parse import urlparse
 from olmocr.data.renderpdf import render_pdf_to_base64png
 
-session = boto3.Session(profile_name="s2")
+session   = boto3.Session(profile_name="s2")
 s3_client = session.client("s3")
 
 

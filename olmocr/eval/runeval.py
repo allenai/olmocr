@@ -9,20 +9,18 @@ import logging
 import argparse
 import zstandard
 
-
+from tqdm import tqdm
 from pathlib import Path
 from typing import Dict, List, Optional
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
-
+from .evalhtml import create_review_html
 
 from .dolma_refine.aligners import HirschbergAligner
 from .dolma_refine.metrics import DocumentEditSimilarity
 from .dolma_refine.segmenters import SpacySegmenter
 from smart_open import register_compressor, smart_open
-from tqdm import tqdm
 
-from .evalhtml import create_review_html
 
 logging.getLogger("pypdf").setLevel(logging.ERROR)
 
@@ -150,7 +148,7 @@ def load_gold_data(gold_data_path: str, max_workers: int = 8) -> dict:
         os.makedirs(CACHE_DIR)
 
     gold_data: Dict[str, str] = {}
-    total_errors = 0
+    total_errors   = 0
     total_overruns = 0
 
     gold_jsonl_files: List[str] = list_jsonl_files(gold_data_path)
@@ -158,8 +156,8 @@ def load_gold_data(gold_data_path: str, max_workers: int = 8) -> dict:
     def process_file(path: str) -> tuple:
         """Process a single JSONL file and return its data and error counts."""
         file_gold_data = {}
-        file_errors = 0
-        file_overruns = 0
+        file_errors    = 0
+        file_overruns  = 0
 
         with smart_open(path, "r") as f:
             for line in f:
@@ -230,9 +228,9 @@ def process_jsonl_file(jsonl_file, gold_data, comparer):
     page_data = {}
     total_alignment_score: float = 0.0
     char_weighted_alignment_score: float = 0.0
-    total_pages = 0
-    total_chars = 0
-    total_errors = 0
+    total_pages    = 0
+    total_chars    = 0
+    total_errors   = 0
     total_overruns = 0
 
     with smart_open(jsonl_file, "r") as f:
@@ -276,19 +274,19 @@ def process_jsonl_file(jsonl_file, gold_data, comparer):
 def do_eval(gold_data_path: str, eval_data_path: str, review_page_name: str, review_page_size: int) -> tuple[float, list[dict]]:
     gold_data = load_gold_data(gold_data_path)
 
-    total_alignment_score = 0
+    total_alignment_score      = 0
     total_char_alignment_score = 0
-    total_weight = 0
-    total_pages  = 0
-    total_errors = 0
+    total_weight   = 0
+    total_pages    = 0
+    total_errors   = 0
     total_overruns = 0
     total_pages_compared = set()
 
     page_eval_data = []
 
     segmenter = SpacySegmenter("spacy")
-    aligner = HirschbergAligner(match_score=1, mismatch_score=-1, indel_score=-1)
-    comparer = DocumentEditSimilarity(segmenter=segmenter, aligner=aligner)
+    aligner   = HirschbergAligner(match_score=1, mismatch_score=-1, indel_score=-1)
+    comparer  = DocumentEditSimilarity(segmenter=segmenter, aligner=aligner)
 
     # List all .jsonl files in the directory or S3 bucket
     jsonl_files = list_jsonl_files(eval_data_path)
