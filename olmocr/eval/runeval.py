@@ -1,18 +1,21 @@
 # This script will build a set of scores for the accuracy of a given pdf conversion tactic against a gold dataset
-import argparse
-import hashlib
-import json
-import logging
 import os
-import random
 import sys
-from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
-from dataclasses import dataclass
+import json
+import boto3
+import random
+import hashlib
+import logging
+import argparse
+import zstandard
+
+
 from pathlib import Path
 from typing import Dict, List, Optional
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
+from dataclasses import dataclass
 
-import boto3
-import zstandard
+
 from .dolma_refine.aligners import HirschbergAligner
 from .dolma_refine.metrics import DocumentEditSimilarity
 from .dolma_refine.segmenters import SpacySegmenter
@@ -22,7 +25,6 @@ from tqdm import tqdm
 from .evalhtml import create_review_html
 
 logging.getLogger("pypdf").setLevel(logging.ERROR)
-
 
 CACHE_DIR = os.path.join(Path.home(), ".cache", "pdf_gold_data_cache")
 
@@ -277,7 +279,7 @@ def do_eval(gold_data_path: str, eval_data_path: str, review_page_name: str, rev
     total_alignment_score = 0
     total_char_alignment_score = 0
     total_weight = 0
-    total_pages = 0
+    total_pages  = 0
     total_errors = 0
     total_overruns = 0
     total_pages_compared = set()
