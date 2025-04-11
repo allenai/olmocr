@@ -1,10 +1,9 @@
 import re
-from typing import Type
-
 import torch
 
-from spacy.lang.en import English
+from typing import Type
 
+from spacy.lang.en import English
 
 from .registry import BaseRegistry
 

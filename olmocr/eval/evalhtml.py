@@ -11,7 +11,8 @@ from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import urlparse
 from olmocr.data.renderpdf import render_pdf_to_base64png
 
-session   = boto3.Session(profile_name="s2")
+#session   = boto3.Session(profile_name="s2")
+session = boto3.Session() 
 s3_client = session.client("s3")
 
 
@@ -37,11 +38,11 @@ def generate_diff_html(a, b):
 def process_entry(i, entry):
     # Randomly decide whether to display gold on the left or right
     if random.choice([True, False]):
-        left_text, right_text = entry["gold_text"], entry["eval_text"]
+        left_text, right_text   = entry["gold_text"], entry["eval_text"]
         left_class, right_class = "gold", "eval"
         left_metadata, right_metadata = entry.get("gold_metadata", ""), entry.get("eval_metadata", "")
     else:
-        left_text, right_text = entry["eval_text"], entry["gold_text"]
+        left_text, right_text   = entry["eval_text"], entry["gold_text"]
         left_class, right_class = "eval", "gold"
         left_metadata, right_metadata = entry.get("eval_metadata", ""), entry.get("gold_metadata", "")
 

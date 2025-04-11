@@ -14,11 +14,11 @@ from pathlib import Path
 from typing import Dict, List, Optional
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
-from .evalhtml import create_review_html
+from olmocr.eval.evalhtml import create_review_html
 
-from .dolma_refine.aligners import HirschbergAligner
-from .dolma_refine.metrics import DocumentEditSimilarity
-from .dolma_refine.segmenters import SpacySegmenter
+from olmocr.eval.dolma_refine.aligners import HirschbergAligner
+from olmocr.eval.dolma_refine.metrics import DocumentEditSimilarity
+from olmocr.eval.dolma_refine.segmenters import SpacySegmenter
 from smart_open import register_compressor, smart_open
 
 
