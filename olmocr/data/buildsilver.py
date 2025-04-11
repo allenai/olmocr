@@ -134,7 +134,7 @@ def process_pdf(pdf_path: str, first_n_pages: int, max_sample_pages: int, no_fil
 
 def main():
     parser = argparse.ArgumentParser(description="Sample PDFs and create requests for GPT-4o.")
-    parser.add_argument("--glob_path", type=str, default='pdfs\\*.pdf', help="Local or S3 path glob (e.g., *.pdf or s3://bucket/pdfs/*.pdf).")
+    parser.add_argument("--glob_path", type=str, default='pdfs/*.pdf', help="Local or S3 path glob (e.g., *.pdf or s3://bucket/pdfs/*.pdf).")
     parser.add_argument("--path_list", type=str, help="Path to a file containing paths to PDFs, one per line.")
     parser.add_argument("--no_filter", action="store_true", help="Disables the basic spam/language filtering so that ALL pdfs listed are used")
     parser.add_argument("--num_sample_docs", type=int, default=5000, help="Number of PDF documents to sample.")
