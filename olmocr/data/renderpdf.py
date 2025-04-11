@@ -62,9 +62,9 @@ def render_pdf_to_base64png(local_pdf_path: str, page_num: int, target_longest_i
 
 
 def render_pdf_to_base64webp(local_pdf_path: str, page: int, target_longest_image_dim: int = 1024):
-    base64_png = render_pdf_to_base64png(local_pdf_path, page, target_longest_image_dim)
+    base64_png  = render_pdf_to_base64png(local_pdf_path, page, target_longest_image_dim)
 
-    png_image = Image.open(io.BytesIO(base64.b64decode(base64_png)))
+    png_image   = Image.open(io.BytesIO(base64.b64decode(base64_png)))
     webp_output = io.BytesIO()
     png_image.save(webp_output, format="WEBP")
 

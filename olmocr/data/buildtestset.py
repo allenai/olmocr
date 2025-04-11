@@ -11,8 +11,9 @@ from pypdf import PdfReader, PdfWriter
 from urllib.parse import urlparse
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
-from olmocr.data.renderpdf import render_pdf_to_base64png
 from olmocr.filter import PdfFilter
+from olmocr.data.renderpdf import render_pdf_to_base64png
+
 
 pdf_filter = PdfFilter()
 
@@ -25,7 +26,7 @@ def sample_pdf_pages(num_pages: int, first_n_pages: int, max_sample_pages: int) 
     """
     if num_pages <= first_n_pages:
         return list(range(1, num_pages + 1))
-    sample_pages = list(range(1, first_n_pages + 1))
+    sample_pages    = list(range(1, first_n_pages + 1))
     remaining_pages = list(range(first_n_pages + 1, num_pages + 1))
     if remaining_pages:
         # How many random pages to pick beyond the first_n_pages
@@ -38,10 +39,10 @@ def fetch_s3_file(s3_url: str, local_path: str) -> str:
     """
     Download a file from an S3 URI (s3://bucket/key) to local_path.
     """
-    parsed = urlparse(s3_url)
+    parsed      = urlparse(s3_url)
     bucket_name = parsed.netloc
-    key = parsed.path.lstrip("/")
-    s3 = boto3.client("s3")
+    key         = parsed.path.lstrip("/")
+    s3          = boto3.client("s3")
     s3.download_file(bucket_name, key, local_path)
     return local_path
 
