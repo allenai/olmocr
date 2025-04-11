@@ -1,21 +1,26 @@
-import json
-import multiprocessing
+
 import os
+import json
+import torch
 import random
-from contextlib import contextmanager
-from dataclasses import dataclass
-from datetime import datetime
-from functools import partial
+import multiprocessing
+
 from hashlib import sha1
 from logging import Logger
+from datetime import datetime
+from functools import partial
+from transformers import AutoProcessor
+from contextlib import contextmanager
+from dataclasses import dataclass
+
 from tempfile import TemporaryDirectory
 from typing import Dict, Generator, List, Optional, TypeVar
 
-import torch
+
 from accelerate import Accelerator
 from accelerate.utils import PrecisionType
 from datasets import Dataset, DatasetDict, concatenate_datasets
-from transformers import AutoProcessor
+
 
 from olmocr.train.dataloader import build_finetuning_dataset
 from olmocr.train.dataprep import (
@@ -60,7 +65,7 @@ def make_dataset(config: TrainConfig, processor: AutoProcessor) -> tuple[Dataset
     # Retrieve the two target lengths from the first source for comparison
     first_source = config.train_data.sources[0]
     target_longest_image_dim = first_source.target_longest_image_dim
-    target_anchor_text_len = first_source.target_anchor_text_len
+    target_anchor_text_len   = first_source.target_anchor_text_len
 
     # Verify that all sources have the same target lengths
     for source in config.train_data.sources:
@@ -168,7 +173,7 @@ def log_trainable_parameters(model: torch.nn.Module, logger: Optional[Logger] = 
     Prints the number of trainable parameters in the model.
     """
     trainable_params = 0
-    all_param = 0
+    all_param        = 0
     for name, param in model.named_parameters():
         all_param += param.numel()
         if param.requires_grad:
