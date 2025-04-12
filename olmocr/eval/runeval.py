@@ -1,37 +1,35 @@
 # This script will build a set of scores for the accuracy of a given pdf conversion tactic against a gold dataset
-import argparse
-import hashlib
-import json
-import logging
 import os
-import random
 import sys
-from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
-from dataclasses import dataclass
+import json
+import boto3
+import random
+import hashlib
+import logging
+import argparse
+import zstandard
+
+from tqdm import tqdm
 from pathlib import Path
 from typing import Dict, List, Optional
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
+from dataclasses import dataclass
 
-import boto3
-import zstandard
-from .dolma_refine.aligners import HirschbergAligner
-from .dolma_refine.metrics import DocumentEditSimilarity
-from .dolma_refine.segmenters import SpacySegmenter
+from olmocr.eval.evalhtml import create_review_html
+
+from olmocr.eval.dolma_refine.aligners import HirschbergAligner
+from olmocr.eval.dolma_refine.metrics import DocumentEditSimilarity
+from olmocr.eval.dolma_refine.segmenters import SpacySegmenter
 from smart_open import register_compressor, smart_open
-from tqdm import tqdm
-
-from .evalhtml import create_review_html
 
 logging.getLogger("pypdf").setLevel(logging.ERROR)
-
 
 CACHE_DIR = os.path.join(Path.home(), ".cache", "pdf_gold_data_cache")
 
 s3_client = boto3.client("s3")
 
-
 def _handle_zst(file_obj, mode):
     return zstandard.open(file_obj, mode)
-
 
 register_compressor(".zstd", _handle_zst)
 register_compressor(".zst", _handle_zst)
@@ -81,10 +79,10 @@ def normalize_json_entry(data: dict) -> NormalizedEntry:
     if "outputs" in data:
         # Birr case
         if data["outputs"] is None:
-            text = None
+            text          = None
             finish_reason = None
         else:
-            text = data["outputs"][0]["text"]
+            text          = data["outputs"][0]["text"]
             finish_reason = data["outputs"][0]["finish_reason"]
 
         # Try to parse the structured output if possible
@@ -148,7 +146,7 @@ def load_gold_data(gold_data_path: str, max_workers: int = 8) -> dict:
         os.makedirs(CACHE_DIR)
 
     gold_data: Dict[str, str] = {}
-    total_errors = 0
+    total_errors   = 0
     total_overruns = 0
 
     gold_jsonl_files: List[str] = list_jsonl_files(gold_data_path)
@@ -156,8 +154,8 @@ def load_gold_data(gold_data_path: str, max_workers: int = 8) -> dict:
     def process_file(path: str) -> tuple:
         """Process a single JSONL file and return its data and error counts."""
         file_gold_data = {}
-        file_errors = 0
-        file_overruns = 0
+        file_errors    = 0
+        file_overruns  = 0
 
         with smart_open(path, "r") as f:
             for line in f:
@@ -191,7 +189,6 @@ def load_gold_data(gold_data_path: str, max_workers: int = 8) -> dict:
     print(f"Gold processing errors: {total_errors}")
     print(f"Gold overrun errors: {total_overruns}")
     print("-----------------------------------------------------------")
-
     return gold_data
 
 
@@ -225,18 +222,17 @@ def list_jsonl_files(path: str) -> list:
 # Expecting each jsonl line to include {s3_path: [path to original pdf], page: [pagenum], text: [proper page text]}
 # Returns the average Levenshtein distance match between the data
 def process_jsonl_file(jsonl_file, gold_data, comparer):
-    page_data = {}
+    page_data      = {}
     total_alignment_score: float = 0.0
     char_weighted_alignment_score: float = 0.0
-    total_pages = 0
-    total_chars = 0
-    total_errors = 0
+    total_pages    = 0
+    total_chars    = 0
+    total_errors   = 0
     total_overruns = 0
 
     with smart_open(jsonl_file, "r") as f:
         for line in f:
             data = json.loads(line)
-
             data = normalize_json_entry(data)
 
             if data.goldkey not in gold_data:
@@ -274,19 +270,19 @@ def process_jsonl_file(jsonl_file, gold_data, comparer):
 def do_eval(gold_data_path: str, eval_data_path: str, review_page_name: str, review_page_size: int) -> tuple[float, list[dict]]:
     gold_data = load_gold_data(gold_data_path)
 
-    total_alignment_score = 0
+    total_alignment_score      = 0
     total_char_alignment_score = 0
-    total_weight = 0
-    total_pages = 0
-    total_errors = 0
-    total_overruns = 0
-    total_pages_compared = set()
+    total_weight               = 0
+    total_pages                = 0
+    total_errors               = 0
+    total_overruns             = 0
+    total_pages_compared       = set()
 
     page_eval_data = []
 
     segmenter = SpacySegmenter("spacy")
-    aligner = HirschbergAligner(match_score=1, mismatch_score=-1, indel_score=-1)
-    comparer = DocumentEditSimilarity(segmenter=segmenter, aligner=aligner)
+    aligner   = HirschbergAligner(match_score=1, mismatch_score=-1, indel_score=-1)
+    comparer  = DocumentEditSimilarity(segmenter=segmenter, aligner=aligner)
 
     # List all .jsonl files in the directory or S3 bucket
     jsonl_files = list_jsonl_files(eval_data_path)

@@ -1,17 +1,18 @@
 import os
+import boto3
 import random
 import tempfile
-from concurrent.futures import ThreadPoolExecutor
-from difflib import SequenceMatcher
-from urllib.parse import urlparse
 
-import boto3
-from jinja2 import Template
 from tqdm import tqdm
+from jinja2 import Template
+from difflib import SequenceMatcher
+from concurrent.futures import ThreadPoolExecutor
 
+from urllib.parse import urlparse
 from olmocr.data.renderpdf import render_pdf_to_base64png
 
-session = boto3.Session(profile_name="s2")
+#session   = boto3.Session(profile_name="s2")
+session   = boto3.Session() 
 s3_client = session.client("s3")
 
 
@@ -37,28 +38,28 @@ def generate_diff_html(a, b):
 def process_entry(i, entry):
     # Randomly decide whether to display gold on the left or right
     if random.choice([True, False]):
-        left_text, right_text = entry["gold_text"], entry["eval_text"]
+        left_text, right_text   = entry["gold_text"], entry["eval_text"]
         left_class, right_class = "gold", "eval"
         left_metadata, right_metadata = entry.get("gold_metadata", ""), entry.get("eval_metadata", "")
     else:
-        left_text, right_text = entry["eval_text"], entry["gold_text"]
+        left_text, right_text   = entry["eval_text"], entry["gold_text"]
         left_class, right_class = "eval", "gold"
         left_metadata, right_metadata = entry.get("eval_metadata", ""), entry.get("gold_metadata", "")
 
     # Generate diff for right_text compared to left_text
     diff_html = generate_diff_html(left_text, right_text)
 
-    left_text = "<p>" + left_text.replace("\n", "</p><p>") + "</p>"
+    left_text  = "<p>" + left_text.replace("\n", "</p><p>") + "</p>"
     right_text = "<p>" + right_text.replace("\n", "</p><p>") + "</p>"
-    diff_html = "<p>" + diff_html.replace("\n", "</p><p>") + "</p>"
+    diff_html  = "<p>" + diff_html.replace("\n", "</p><p>") + "</p>"
 
     parsed_url = urlparse(entry["s3_path"])
-    bucket = parsed_url.netloc
-    s3_key = parsed_url.path.lstrip("/")
+    bucket     = parsed_url.netloc
+    s3_key     = parsed_url.path.lstrip("/")
     signed_pdf_link = s3_client.generate_presigned_url("get_object", Params={"Bucket": bucket, "Key": s3_key}, ExpiresIn=604800)
 
     with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp_pdf:
-        pdf_path = tmp_pdf.name
+        pdf_path    = tmp_pdf.name
         bucket, key = entry["s3_path"].replace("s3://", "").split("/", 1)
         s3_client.download_file(bucket, key, pdf_path)
         page_image_base64 = render_pdf_to_base64png(tmp_pdf.name, entry["page"], target_longest_image_dim=1024)

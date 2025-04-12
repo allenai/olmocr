@@ -1,9 +1,10 @@
-import base64
+
 import io
+import base64
 import subprocess
-from typing import List
 
 from PIL import Image
+from typing import List
 
 
 def get_pdf_media_box_width_height(local_pdf_path: str, page_num: int) -> tuple[float, float]:
@@ -61,9 +62,9 @@ def render_pdf_to_base64png(local_pdf_path: str, page_num: int, target_longest_i
 
 
 def render_pdf_to_base64webp(local_pdf_path: str, page: int, target_longest_image_dim: int = 1024):
-    base64_png = render_pdf_to_base64png(local_pdf_path, page, target_longest_image_dim)
+    base64_png  = render_pdf_to_base64png(local_pdf_path, page, target_longest_image_dim)
 
-    png_image = Image.open(io.BytesIO(base64.b64decode(base64_png)))
+    png_image   = Image.open(io.BytesIO(base64.b64decode(base64_png)))
     webp_output = io.BytesIO()
     png_image.save(webp_output, format="WEBP")
 
@@ -92,38 +93,38 @@ def get_png_dimensions_from_base64(base64_data) -> tuple[int, int]:
         raise ValueError("Not a valid PNG file")
 
     # Positions in the binary data where width and height are stored
-    width_start = 16  # Byte position where width starts (0-based indexing)
-    _width_end = 20  # Byte position where width ends (exclusive)
+    width_start   = 16  # Byte position where width starts (0-based indexing)
+    _width_end    = 20  # Byte position where width ends (exclusive)
     _height_start = 20
-    height_end = 24
+    height_end    = 24
 
     # Compute the byte range needed (from width_start to height_end)
     start_byte = width_start
-    end_byte = height_end
+    end_byte   = height_end
 
     # Calculate base64 character positions
     # Each group of 3 bytes corresponds to 4 base64 characters
     base64_start = (start_byte // 3) * 4
-    base64_end = ((end_byte + 2) // 3) * 4  # Add 2 to ensure we cover partial groups
+    base64_end   = ((end_byte + 2) // 3) * 4  # Add 2 to ensure we cover partial groups
 
     # Extract the necessary base64 substring
     base64_substring = base64_data[base64_start:base64_end]
 
     # Decode only the necessary bytes
-    decoded_bytes = base64.b64decode(base64_substring)
+    decoded_bytes    = base64.b64decode(base64_substring)
 
     # Compute the offset within the decoded bytes
     offset = start_byte % 3
 
     # Extract width and height bytes
-    width_bytes = decoded_bytes[offset : offset + 4]
+    width_bytes  = decoded_bytes[offset : offset + 4]
     height_bytes = decoded_bytes[offset + 4 : offset + 8]
 
     if len(width_bytes) < 4 or len(height_bytes) < 4:
         raise ValueError("Insufficient data to extract dimensions")
 
     # Convert bytes to integers
-    width = int.from_bytes(width_bytes, "big")
+    width  = int.from_bytes(width_bytes, "big")
     height = int.from_bytes(height_bytes, "big")
 
     return width, height

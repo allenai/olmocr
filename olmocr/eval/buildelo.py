@@ -1,16 +1,18 @@
-import argparse
-import dataclasses
-import functools
-import random
 import re
-from concurrent.futures import ProcessPoolExecutor, as_completed
-from itertools import combinations
-
 import boto3
+import random
+import argparse
+import functools
+import dataclasses
+
+from tqdm import tqdm
+from itertools import combinations
+from concurrent.futures import ProcessPoolExecutor, as_completed
+
 from dolma_refine.evaluate.aligners import HirschbergAligner
 from dolma_refine.evaluate.metrics import DocumentEditSimilarity
 from dolma_refine.evaluate.segmenters import SpacySegmenter
-from tqdm import tqdm
+
 
 from olmocr.eval.evalhtml import create_review_html
 from olmocr.s3_utils import expand_s3_glob, get_s3_bytes

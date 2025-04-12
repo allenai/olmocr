@@ -1,14 +1,16 @@
 # Sends list of batch files to OpenAI for processing
 # However, it also waits and gets the files when they are done, saves its state, and
 # allows you to submit more than the 100GB of file request limits that the openaiAPI has
-import argparse
-import datetime
-import json
+
 import os
 import time
+import json
+import argparse
+import datetime
 
-from openai import OpenAI
 from tqdm import tqdm
+from openai import OpenAI
+
 
 # Set up OpenAI client (API key should be set in the environment)
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
@@ -63,7 +65,7 @@ def download_batch_result(batch_id, output_folder):
     return batch_id, True
 
 
-ALL_STATES = ["init", "processing", "completed", "errored_out", "could_not_upload"]
+ALL_STATES      = ["init", "processing", "completed", "errored_out", "could_not_upload"]
 FINISHED_STATES = ["completed", "errored_out"]
 
 
@@ -120,7 +122,7 @@ def update_state(folder_path: str, filename: str, **kwargs):
     all_state[filename]["last_checked"] = datetime.datetime.now()
 
     state_file = os.path.join(folder_path, UPLOAD_STATE_FILENAME)
-    temp_file = state_file + ".tmp"
+    temp_file  = state_file + ".tmp"
 
     # Write to temporary file first
     with open(temp_file, "w") as f:

@@ -1,16 +1,18 @@
-import argparse
+
+import os
+import re
 import csv
 import json
-import os
 import random
-import re
 import sqlite3
-from collections import Counter
-from concurrent.futures import ProcessPoolExecutor, as_completed
-from typing import Optional
-from urllib.parse import urlparse
+import argparse
 
 from tqdm import tqdm
+from typing import Optional
+from collections import Counter
+from concurrent.futures import ProcessPoolExecutor, as_completed
+
+from urllib.parse import urlparse
 
 
 def parse_pdf_hash(pretty_pdf_path: str) -> Optional[str]:
@@ -129,11 +131,11 @@ def main():
         help="How many sample rows to include in the sample CSV",
     )
 
-    args = parser.parse_args()
+    args    = parser.parse_args()
 
     db_path = cache_athena_csv_to_db(args.athena_csv)
 
-    all_rows = []
+    all_rows  = []
     filepaths = [os.path.join(args.input, filename) for filename in os.listdir(args.input) if filename.endswith(".jsonl")]
 
     with ProcessPoolExecutor() as executor:
