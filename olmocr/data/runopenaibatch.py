@@ -152,6 +152,8 @@ def get_estimated_space_usage(folder_path):
 
 #     return all_states[0] if len(all_states) > 0 else None
 
+
+
 def get_next_work_item(folder_path):
     all_states = list(get_state(folder_path).values())
     pending = [s for s in all_states if s["state"] not in FINISHED_STATES]
@@ -184,6 +186,7 @@ def process_folder(folder_path: str, max_gb: int):
     last_loop_time = datetime.datetime.now()
 
     starting_free_space = MAX_OPENAI_DISK_SPACE - get_total_space_usage()
+
 
     if starting_free_space < (max_gb * 1024**3) * 2:
         raise ValueError(
