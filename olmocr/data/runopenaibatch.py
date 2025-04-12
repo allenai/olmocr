@@ -145,12 +145,23 @@ def get_estimated_space_usage(folder_path):
     return sum(s["size"] for s in all_states.values() if s["state"] == "processing")
 
 
+# def get_next_work_item(folder_path):
+#     all_states = list(get_state(folder_path).values())
+#     all_states = [s for s in all_states if s["state"] not in FINISHED_STATES]
+#     all_states.sort(key=lambda s: s["last_checked"])
+
+#     return all_states[0] if len(all_states) > 0 else None
+
 def get_next_work_item(folder_path):
     all_states = list(get_state(folder_path).values())
-    all_states = [s for s in all_states if s["state"] not in FINISHED_STATES]
-    all_states.sort(key=lambda s: s["last_checked"])
+    pending = [s for s in all_states if s["state"] not in FINISHED_STATES]
 
-    return all_states[0] if len(all_states) > 0 else None
+    if not pending:
+        print("No work items pending.")
+        return None
+
+    pending.sort(key=lambda s: s["last_checked"])
+    return pending[0]
 
 
 def get_done_total(folder_path):
@@ -183,7 +194,16 @@ def process_folder(folder_path: str, max_gb: int):
         processing, done, total = get_done_total(folder_path)
         print(f"Total items {total}, processing {processing}, done {done}, {done/total*100:.1f}%")
 
+        # work_item = get_next_work_item(folder_path)
+        # print(f"Processing {os.path.basename(work_item['filename'])}, cur status = {work_item['state']}")
+
         work_item = get_next_work_item(folder_path)
+
+        if work_item is None:
+            print("No work item available right now.")
+            time.sleep(0.5)                             # หรือจะข้าม iteration นี้ไปเลย
+            continue
+
         print(f"Processing {os.path.basename(work_item['filename'])}, cur status = {work_item['state']}")
 
         # If all work items have been checked on, then you need to sleep a bit
