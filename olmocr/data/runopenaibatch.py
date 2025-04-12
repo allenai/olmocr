@@ -132,7 +132,6 @@ def update_state(folder_path: str, filename: str, **kwargs):
 
     # Atomic rename of temporary file to target file
     os.replace(temp_file, state_file)
-
     return all_state
 
 
@@ -144,7 +143,6 @@ def get_estimated_space_usage(folder_path):
     all_states = get_state(folder_path)
     return sum(s["size"] for s in all_states.values() if s["state"] == "processing")
 
-
 # def get_next_work_item(folder_path):
 #     all_states = list(get_state(folder_path).values())
 #     all_states = [s for s in all_states if s["state"] not in FINISHED_STATES]
@@ -152,11 +150,9 @@ def get_estimated_space_usage(folder_path):
 
 #     return all_states[0] if len(all_states) > 0 else None
 
-
-
 def get_next_work_item(folder_path):
     all_states = list(get_state(folder_path).values())
-    pending = [s for s in all_states if s["state"] not in FINISHED_STATES]
+    pending    = [s for s in all_states if s["state"] not in FINISHED_STATES]
 
     if not pending:
         print("No work items pending.")
@@ -186,7 +182,6 @@ def process_folder(folder_path: str, max_gb: int):
     last_loop_time = datetime.datetime.now()
 
     starting_free_space = MAX_OPENAI_DISK_SPACE - get_total_space_usage()
-
 
     if starting_free_space < (max_gb * 1024**3) * 2:
         raise ValueError(
