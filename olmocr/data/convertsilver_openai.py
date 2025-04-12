@@ -1,4 +1,3 @@
-
 import os
 import re
 import sys
@@ -12,6 +11,7 @@ from pathlib import Path
 from cached_path import cached_path
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
+from olmocr.data.buildsilver import build_page_query
 
 def setup_logging():
     """Configure logging for the script."""
@@ -62,7 +62,7 @@ def process_file(input_file: str, output_file: str, rewrite_prompt_str: bool):
                         # Save the pdf to a temporary cache folder
                         local_pdf_path = cached_path(s3_path, quiet=True)
 
-                        from olmocr.data.buildsilver import build_page_query
+                        #from olmocr.data.buildsilver import build_page_query
 
                         obj = build_page_query(local_pdf_path, s3_path, page)
                         # raw_page_text = get_anchor_text(local_pdf_path, page, pdf_engine="pdfreport")

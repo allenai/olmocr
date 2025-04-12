@@ -12,7 +12,7 @@ from urllib.parse import urlparse
 from olmocr.data.renderpdf import render_pdf_to_base64png
 
 #session   = boto3.Session(profile_name="s2")
-session = boto3.Session() 
+session   = boto3.Session() 
 s3_client = session.client("s3")
 
 
@@ -49,17 +49,17 @@ def process_entry(i, entry):
     # Generate diff for right_text compared to left_text
     diff_html = generate_diff_html(left_text, right_text)
 
-    left_text = "<p>" + left_text.replace("\n", "</p><p>") + "</p>"
+    left_text  = "<p>" + left_text.replace("\n", "</p><p>") + "</p>"
     right_text = "<p>" + right_text.replace("\n", "</p><p>") + "</p>"
-    diff_html = "<p>" + diff_html.replace("\n", "</p><p>") + "</p>"
+    diff_html  = "<p>" + diff_html.replace("\n", "</p><p>") + "</p>"
 
     parsed_url = urlparse(entry["s3_path"])
-    bucket = parsed_url.netloc
-    s3_key = parsed_url.path.lstrip("/")
+    bucket     = parsed_url.netloc
+    s3_key     = parsed_url.path.lstrip("/")
     signed_pdf_link = s3_client.generate_presigned_url("get_object", Params={"Bucket": bucket, "Key": s3_key}, ExpiresIn=604800)
 
     with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp_pdf:
-        pdf_path = tmp_pdf.name
+        pdf_path    = tmp_pdf.name
         bucket, key = entry["s3_path"].replace("s3://", "").split("/", 1)
         s3_client.download_file(bucket, key, pdf_path)
         page_image_base64 = render_pdf_to_base64png(tmp_pdf.name, entry["page"], target_longest_image_dim=1024)
