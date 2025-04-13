@@ -1,12 +1,12 @@
 [build-system]
-requires = ["setuptools", "wheel"]
+requires      = ["setuptools", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
 # See https://setuptools.pypa.io/en/latest/userguide/quickstart.html for more project configuration options.
-name = "olmocr"
+name    = "olmocr"
 dynamic = ["version"]
-readme = "README.md"
+readme  = "README.md"
 classifiers = [
     "Intended Audience :: Science/Research",
     "Development Status :: 3 - Alpha",
@@ -35,16 +35,16 @@ dependencies = [
   "zstandard",
   "boto3",
   "httpx",
-  "torch>=2.5.1",
-  "transformers>=4.46.2",
+  #"torch>=2.5.1",
+  #"transformers>=4.46.2",
   "beaker-py",
 ]
 license = {file = "LICENSE"}
 
 [project.urls]
-Homepage = "https://github.com/allenai/olmocr"
+Homepage   = "https://github.com/allenai/olmocr"
 Repository = "https://github.com/allenai/olmocr"
-Changelog = "https://github.com/allenai/olmocr/blob/main/CHANGELOG.md"
+Changelog  = "https://github.com/allenai/olmocr/blob/main/CHANGELOG.md"
 # Documentation = "https://olmocr.readthedocs.io/"
 
 [project.optional-dependencies]
@@ -94,7 +94,7 @@ train = [
     "s3fs",
     "necessary",
     "einops",
-    "transformers>=4.45.1"
+    #"transformers>=4.45.1"
 ]
 
 elo = [
