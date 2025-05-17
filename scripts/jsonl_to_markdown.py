@@ -1,13 +1,15 @@
+#!/usr/bin/env python3
 import json
 import os
 import sys
+from pathlib import Path
 
 
 # This is a simple script to convert JSONL files to Markdown format.
 # It reads each line of the JSONL file, extracts the 'text' field,
 # and saves it as a Markdown file with the line number as the filename.
 # The script also handles potential JSON decoding errors and prints relevant messages.
-def jsonl_to_markdown(input_file, output_dir):
+def jsonl_to_markdown(input_file: str, output_dir: str) -> None:
     """
     Reads a JSONL file, extracts the 'text' field from each line, and saves it as a Markdown file.
 
@@ -15,26 +17,30 @@ def jsonl_to_markdown(input_file, output_dir):
         input_file (str): Path to the input JSONL file.
         output_dir (str): Directory to save the Markdown files.
     """
-    if not os.path.exists(output_dir):
-        os.makedirs(output_dir)
+    # Create output directory if it doesn't exist
+    output_path = Path(output_dir)
+    output_path.mkdir(parents=True, exist_ok=True)
 
     with open(input_file, "r", encoding="utf-8") as file:
-        for i, line in enumerate(file):
+        for i, line in enumerate(file, 1):
             try:
                 # Parse the JSON line
                 data = json.loads(line)
                 text_content = data.get("text", "")
 
-                # Save to a Markdown file
-                output_file = os.path.join(output_dir, f"line_{i + 1}.md")
-                with open(output_file, "w", encoding="utf-8") as md_file:
-                    md_file.write(text_content)
+                # Convert to Markdown format
+                markdown_content = f"# Extracted Content (Line {i})\n\n{text_content}"
 
-                print(f"Extracted and saved line {i + 1} to {output_file}")
+                # Save to a Markdown file
+                output_file = output_path / f"line_{i}.md"
+                with open(output_file, "w", encoding="utf-8") as md_file:
+                    md_file.write(markdown_content)
+
+                print(f"Extracted and saved line {i} to {output_file}")
             except json.JSONDecodeError as e:
-                print(f"Error decoding JSON on line {i + 1}: {e}")
+                print(f"Error decoding JSON on line {i}: {e}")
             except Exception as e:
-                print(f"Unexpected error on line {i + 1}: {e}")
+                print(f"Unexpected error on line {i}: {e}")
 
 
 # Example usage
