@@ -7,7 +7,7 @@ lingua-language-detector
 Pillow
 ruff
 mypy>=1.0,<1.5
-black>=23.0,<24.0
+black>=23.0,<26.0
 isort>=5.12,<5.13
 pytest
 pytest-sphinx
