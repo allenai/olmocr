@@ -8,7 +8,7 @@ Pillow
 ruff
 mypy>=1.0,<1.5
 black>=23.0,<24.0
-isort>=5.12,<5.13
+isort>=5.12,<6.1
 pytest
 pytest-sphinx
 pytest-cov
