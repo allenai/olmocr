@@ -36,7 +36,7 @@ dependencies = [
   "boto3",
   "httpx",
   "torch>=2.5.1",
-  "transformers==4.46.2",
+  "transformers==4.52.3",
   "img2pdf",
   "beaker-py",
 ]
