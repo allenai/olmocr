@@ -366,7 +366,24 @@ async def process_pdf(args, worker_id: int, pdf_orig_path: str):
                     f"Document {pdf_orig_path} processed with {num_fallback_pages} fallback pages out of {num_pages}, proceeding to build Dolma document."
                 )
 
-            return build_dolma_document(pdf_orig_path, page_results)
+            # Use the modular document builder with optional structured output
+            from olmocr.pipeline.document_builder import create_document_builder
+            from olmocr.structured_output import create_structured_output_config
+
+            # Create structured output config if enabled
+            structured_config = None
+            if getattr(args, 'structured_output', False):
+                structured_config = create_structured_output_config(
+                    extract_forms=getattr(args, 'extract_forms', True),
+                    extract_tables=getattr(args, 'extract_tables', True),
+                    extract_key_value_pairs=getattr(args, 'extract_key_value_pairs', True),
+                    min_confidence=getattr(args, 'structured_min_confidence', 0.5),
+                    enable_field_validation=True
+                )
+
+            # Create document builder with structured output support
+            document_builder = create_document_builder(structured_config)
+            return document_builder.build_document(pdf_orig_path, page_results)
         except Exception as e:
             # Check for ExceptionGroup with BrokenProcessPool
             if isinstance(e, ExceptionGroup):
@@ -970,6 +987,14 @@ async def main():
     parser.add_argument("--apply_filter", action="store_true", help="Apply basic filtering to English pdfs which are not forms, and not likely seo spam")
     parser.add_argument("--stats", action="store_true", help="Instead of running any job, reports some statistics about the current workspace")
     parser.add_argument("--markdown", action="store_true", help="Also write natural text to markdown files preserving the folder structure of the input pdfs")
+
+    # Structured output parameters
+    parser.add_argument("--structured-output", action="store_true", help="Enable structured output extraction for forms, tables, and key-value pairs")
+    parser.add_argument("--extract-forms", action="store_true", help="Extract form fields and key-value pairs (requires --structured-output)")
+    parser.add_argument("--extract-tables", action="store_true", help="Extract tables in structured format (requires --structured-output)")
+    parser.add_argument("--extract-key-value-pairs", action="store_true", help="Extract key-value pairs from documents (requires --structured-output)")
+    parser.add_argument("--structured-min-confidence", type=float, default=0.5, help="Minimum confidence threshold for structured extraction (default: 0.5)")
+    parser.add_argument("--structured-output-format", choices=["json", "combined"], default="combined", help="Output format: 'json' for structured data only, 'combined' for text + structured data (default: combined)")
 
     # Model parameters
     parser.add_argument(
