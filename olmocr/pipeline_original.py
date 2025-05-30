@@ -1,37 +1,56 @@
-"""
-OLMoCR Pipeline - Refactored with Backward Compatibility
+import argparse
+import asyncio
+import atexit
+import base64
+import datetime
+import hashlib
+import json
+import logging
+import multiprocessing
+import os
+import random
+import re
+import shutil
+import sys
+import tempfile
+import time
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
+from concurrent.futures.process import BrokenProcessPool
+from dataclasses import dataclass
+from functools import cache, partial
+from io import BytesIO
+from urllib.parse import urlparse
 
-This module maintains the original pipeline.py API while using the new modular
-architecture under the hood. The monolithic implementation has been refactored
-into focused modules for better maintainability and testability.
+import boto3
+import httpx
+import torch
+from botocore.exceptions import ClientError
+from huggingface_hub import snapshot_download
+from PIL import Image
+from pypdf import PdfReader
+from tqdm import tqdm
 
-New modular structure:
-- core: Main orchestration and workflow coordination
-- processing: Page and document processing logic
-- workers: Worker management and parallel processing
-- http_client: HTTP communication with SGLang backend
-- document_builder: Dolma document creation and formatting
-
-All original functionality is preserved exactly as before.
-"""
-
-# For now, import everything from the original implementation to maintain compatibility
-# The refactored modules are available in olmocr.pipeline.* for new code
-from olmocr.pipeline_original import *
-
-# Also make the new modular components available
-from olmocr.pipeline.document_builder import PageResult as ModularPageResult
-from olmocr.pipeline.document_builder import build_dolma_document as modular_build_dolma_document
-from olmocr.pipeline.http_client import apost as modular_apost
-from olmocr.pipeline.core import create_pipeline_orchestrator
-
-# Note: All imports are handled by the wildcard import from pipeline_original
-# The modular components are available for new development:
-# - olmocr.pipeline.core.PipelineOrchestrator
-# - olmocr.pipeline.processing.PageProcessor, DocumentProcessor
-# - olmocr.pipeline.workers.WorkerManager
-# - olmocr.pipeline.http_client.SGLangHTTPClient
-# - olmocr.pipeline.document_builder.DolmaDocumentBuilder
+from olmocr.check import (
+    check_poppler_version,
+    check_sglang_version,
+    check_torch_gpu_available,
+)
+from olmocr.data.renderpdf import render_pdf_to_base64png
+from olmocr.filter.filter import Language, PdfFilter
+from olmocr.image_utils import convert_image_to_pdf_bytes, is_jpeg, is_png
+from olmocr.metrics import MetricsKeeper, WorkerTracker
+from olmocr.prompts import PageResponse, build_finetuning_prompt
+from olmocr.prompts.anchor import get_anchor_text
+from olmocr.s3_utils import (
+    download_directory,
+    download_zstd_csv,
+    expand_s3_glob,
+    get_s3_bytes,
+    get_s3_bytes_with_backoff,
+    parse_s3_path,
+)
+from olmocr.version import VERSION
+from olmocr.work_queue import LocalWorkQueue, S3WorkQueue, WorkQueue
 
 # Initialize logger
 logger = logging.getLogger(__name__)
