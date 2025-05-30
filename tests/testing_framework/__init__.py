@@ -129,22 +129,35 @@ except ImportError:
 try:
     from .mocks import (
         MockSGLangServer, MockS3Client, MockFileSystem, MockLogger,
-        create_mock_pipeline_components
+        create_mock_pipeline_components, create_mock_args
     )
 except ImportError:
     # Fallback mocks
     from unittest.mock import MagicMock
-    
+
     class MockSGLangServer:
         def __init__(self):
             pass
-    
+
     class MockS3Client:
         def __init__(self):
             pass
-    
+
     def create_mock_pipeline_components():
         return {}
+
+    def create_mock_args(**overrides):
+        mock_args = MagicMock()
+        default_args = {
+            'workspace': '/tmp/test_workspace',
+            'workers': 1,
+            'model': 'test-model',
+            'structured_output': False,
+        }
+        default_args.update(overrides)
+        for key, value in default_args.items():
+            setattr(mock_args, key, value)
+        return mock_args
 
 try:
     from .property_testing import (
@@ -320,6 +333,7 @@ __all__ = [
     'MockFileSystem',
     'MockLogger',
     'create_mock_pipeline_components',
+    'create_mock_args',
 
     # Property-based testing
     'PropertyTestGenerator',
