@@ -26,7 +26,8 @@ A toolkit for converting PDFs and other image-based document formats into clean,
 Try the online demo: [https://olmocr.allenai.org/](https://olmocr.allenai.org/)
 
 Features:
- - Convert PDF, PNG, and JPEG based documents into clean Markdown
+ - Convert PDF, PNG, JPEG, and other image formats into clean Markdown
+ - **Enhanced Image Support**: Handles RGBA (transparency), 16-bit, grayscale with alpha, and palette images
  - Support for equations, tables, handwriting, and complex formatting
  - Automatically removes headers and footers
  - Convert into text with a natural reading order, even in the presence of
@@ -35,6 +36,7 @@ Features:
  - (Based on a 7B parameter VLM, so it requires a GPU)
 
 ### News
+ - **NEW** - Enhanced Image Processing - Fixed RGBA, 16-bit, and palette image handling issues. All image formats now supported with automatic preprocessing.
  - May 23, 2025 - v0.1.70 - Official docker support and images are now available! [See Docker usage](#using-docker)
  - May 19, 2025 - v0.1.68 - [olmOCR-Bench](https://github.com/allenai/olmocr/tree/main/olmocr/bench) launch, scoring 77.4. Launch includes 2 point performance boost in olmOCR pipeline due to bug fixes with prompts.
  - Mar 17, 2025 - v0.1.60 - Performance improvements due to better temperature selection in sampling.
@@ -232,6 +234,43 @@ curl -o olmocr-sample.pdf https://olmocr.allenai.org/papers/olmocr_3pg_sample.pd
 python -m olmocr.pipeline ./localworkspace --markdown --pdfs olmocr-sample.pdf
 ```
 > You can also visit our Docker repository on [Docker Hub](https://hub.docker.com/r/alleninstituteforai/olmocr).
+
+### Troubleshooting
+
+#### Image Processing Issues
+
+**Supported Image Formats:**
+- ✅ **PDF** - Primary format, fully supported
+- ✅ **PNG** - All variants including RGBA (transparency), 16-bit, grayscale with alpha
+- ✅ **JPEG** - Standard RGB and grayscale formats
+- ✅ **Other formats** - Most PIL-supported formats with automatic preprocessing
+
+**Common Issues and Solutions:**
+
+1. **"Image with transparency and a bit depth of 16" Error**
+   - **Fixed!** This error has been resolved with automatic image preprocessing
+   - RGBA and 16-bit images are now automatically converted to compatible formats
+
+2. **Palette/Indexed Color Images**
+   - **Fixed!** Palette images are automatically converted to RGB format
+   - No manual conversion needed
+
+3. **Grayscale with Alpha (LA) Images**
+   - **Fixed!** LA images are automatically converted to standard grayscale
+   - Transparency information is preserved where possible
+
+4. **Performance with Large Images**
+   - Large images are processed efficiently with temporary file cleanup
+   - Compatible images (RGB, L) use fast-path processing without conversion
+
+5. **Memory Issues**
+   - Image preprocessing uses temporary files that are automatically cleaned up
+   - For very large batches, consider processing in smaller groups
+
+**If you encounter image processing issues:**
+1. Verify the image can be opened with PIL: `python -c "from PIL import Image; Image.open('your_image.png')"`
+2. Check the image mode: `python -c "from PIL import Image; print(Image.open('your_image.png').mode)"`
+3. Enable debug logging to see preprocessing details: `export PYTHONPATH=. && python -c "import logging; logging.basicConfig(level=logging.DEBUG)"`
 
 ### Full documentation for the pipeline
 
