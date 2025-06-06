@@ -46,16 +46,28 @@ to run it against your own OCR tools. Your tool just needs to support Markdown o
       <td align="center">48.3 ± 1.1</td>
     </tr>
     <tr>
-      <td align="left">Marker v1.6.2</td>
-      <td align="center">24.3</td>
-      <td align="center">22.1</td>
-      <td align="center">69.8</td>
-      <td align="center">24.3</td>
-      <td align="center">87.1</td>
-      <td align="center">71.0</td>
-      <td align="center">76.9</td>
-      <td align="center"><strong>99.5</strong></td>
-      <td align="center">59.4 ± 1.1</td>
+      <td align="left">Marker v1.7.4 (base)</td>
+      <td align="center"><strong>77.7</strong></td>
+      <td align="center">59.6</td>
+      <td align="center">57.9</td>
+      <td align="center">27.8</td>
+      <td align="center">85.3</td>
+      <td align="center">73.5</td>
+      <td align="center">78.7</td>
+      <td align="center">99.1</td>
+      <td align="center">70.0 ± 1.1</td>
+    </tr>
+    <tr>
+      <td align="left">Marker v1.7.4 (hybrid)</td>
+      <td align="center"><strong>77.7</strong></td>
+      <td align="center">71.2</td>
+      <td align="center"><strong>78.1</strong></td>
+      <td align="center">32.3</td>
+      <td align="center">83.4</td>
+      <td align="center">73.8</td>
+      <td align="center">79.0</td>
+      <td align="center">99.2</td>
+      <td align="center">74.3 ± 1.1</td>
     </tr>
     <tr>
       <td align="left">MinerU v1.3.10</td>
@@ -71,14 +83,14 @@ to run it against your own OCR tools. Your tool just needs to support Markdown o
     </tr>
     <tr>
       <td align="left">Mistral OCR API</td>
-      <td align="center"><strong>77.2</strong></td>
+      <td align="center">77.2</td>
       <td align="center">67.5</td>
       <td align="center">60.6</td>
       <td align="center">29.3</td>
       <td align="center">93.6</td>
       <td align="center">71.3</td>
       <td align="center">77.1</td>
-      <td align="center">99.4</td>
+      <td align="center"><strong>99.4</strong></td>
       <td align="center">72.0 ± 1.1</td>
     </tr>
     <tr>
@@ -121,7 +133,7 @@ to run it against your own OCR tools. Your tool just needs to support Markdown o
       <td align="left">Gemini Flash 2 (Anchored)</td>
       <td align="center">54.5</td>
       <td align="center">56.1</td>
-      <td align="center"><strong>72.1</strong></td>
+      <td align="center">72.1</td>
       <td align="center">34.2</td>
       <td align="center">64.7</td>
       <td align="center">61.5</td>
