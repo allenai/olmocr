@@ -19,6 +19,9 @@
   <a href="https://discord.gg/sZq3jTNVNG">
     <img alt="Discord" src="https://img.shields.io/badge/Discord%20-%20blue?style=flat&logo=discord&label=Ai2&color=%235B65E9">
   </a>
+  <a href="https://replicate.com/lucataco/olmocr-7b">
+    <img alt="Replicate" src="https://replicate.com/lucataco/olmocr-7b/badge">
+  </a>
 </p>
 
 A toolkit for converting PDFs and other image-based document formats into clean, readable, plain text format.
