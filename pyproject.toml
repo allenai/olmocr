@@ -51,7 +51,7 @@ Changelog = "https://github.com/allenai/olmocr/blob/main/CHANGELOG.md"
 
 [project.optional-dependencies]
 gpu = [
-    "sgl-kernel==0.0.3.post1",
+    "sgl-kernel==0.1.8",
     "sglang[all]==0.4.2",
 ]
 
