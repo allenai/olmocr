@@ -16,12 +16,12 @@ train_data:
   sources:
     - name: openai_batch_data_v5_1_train
       response_glob_path: /data/jakep/pdfdata/openai_batch_data_v5_1_train_done/*.json
-      target_longest_image_dim: 1024
-      target_anchor_text_len: 6000
+      target_longest_image_dim: [1024]
+      target_anchor_text_len: [6000]
     - name: openai_batch_data_v5_1_iabooks_train
       response_glob_path: /data/jakep/pdfdata/openai_batch_data_v5_1_iabooks_train_done/*.json
-      target_longest_image_dim: 1024
-      target_anchor_text_len: 6000
+      target_longest_image_dim: [1024]
+      target_anchor_text_len: [6000]
 
 valid_data:
   cache_location: /data/jakep/pdfdata/pdelfin_cache
@@ -30,12 +30,12 @@ valid_data:
     # These tend to be small, so you can load from s3 it's no big deal
     - name: openai_batch_data_v5_1_eval
       response_glob_path: s3://ai2-oe-data/jakep/pdfdata/openai_batch_done_v5_1_eval/*.json
-      target_longest_image_dim: 1024
-      target_anchor_text_len: 6000
+      target_longest_image_dim: [1024]
+      target_anchor_text_len: [6000]
     - name: openai_batch_data_v5_1_iabooks_eval
       response_glob_path: s3://ai2-oe-data/jakep/pdfdata/openai_batch_done_v5_1_iabooks_eval/*.json
-      target_longest_image_dim: 1024
-      target_anchor_text_len: 6000
+      target_longest_image_dim: [1024]
+      target_anchor_text_len: [6000]
 
 
 
