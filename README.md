@@ -138,7 +138,7 @@ conda activate olmocr
 pip install olmocr[bench]
 
 # For actually converting the files with your own GPU
-pip install olmocr.[gpu]  --extra-index-url https://download.pytorch.org/whl/cu128
+pip install olmocr[gpu]  --extra-index-url https://download.pytorch.org/whl/cu128
 
 # Recommended: Install flash infer for faster inference on GPU
 pip install https://download.pytorch.org/whl/cu128/flashinfer/flashinfer_python-0.2.5%2Bcu128torch2.7-cp38-abi3-linux_x86_64.whl
