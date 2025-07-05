@@ -242,11 +242,11 @@ python -m olmocr.pipeline ./localworkspace --markdown --pdfs olmocr-sample.pdf
 
 ```bash
 python -m olmocr.pipeline --help
-usage: pipeline.py [-h] [--pdfs PDFS] [--workspace_profile WORKSPACE_PROFILE] [--pdf_profile PDF_PROFILE] [--pages_per_group PAGES_PER_GROUP]
-                   [--max_page_retries MAX_PAGE_RETRIES] [--max_page_error_rate MAX_PAGE_ERROR_RATE] [--workers WORKERS] [--apply_filter] [--stats] [--model MODEL]
-                   [--model_max_context MODEL_MAX_CONTEXT] [--model_chat_template MODEL_CHAT_TEMPLATE] [--target_longest_image_dim TARGET_LONGEST_IMAGE_DIM]
-                   [--target_anchor_text_len TARGET_ANCHOR_TEXT_LEN] [--beaker] [--beaker_workspace BEAKER_WORKSPACE] [--beaker_cluster BEAKER_CLUSTER]
-                   [--beaker_gpus BEAKER_GPUS] [--beaker_priority BEAKER_PRIORITY]
+usage: pipeline.py [-h] [--pdfs [PDFS ...]] [--workspace_profile WORKSPACE_PROFILE] [--pdf_profile PDF_PROFILE] [--pages_per_group PAGES_PER_GROUP] [--max_page_retries MAX_PAGE_RETRIES]
+                   [--max_page_error_rate MAX_PAGE_ERROR_RATE] [--workers WORKERS] [--apply_filter] [--stats] [--markdown] [--model MODEL] [--gpu-memory-utilization GPU_MEMORY_UTILIZATION]
+                   [--max_model_len MAX_MODEL_LEN] [--model_max_context MODEL_MAX_CONTEXT] [--model_chat_template MODEL_CHAT_TEMPLATE] [--target_longest_image_dim TARGET_LONGEST_IMAGE_DIM]
+                   [--target_anchor_text_len TARGET_ANCHOR_TEXT_LEN] [--beaker] [--beaker_workspace BEAKER_WORKSPACE] [--beaker_cluster BEAKER_CLUSTER] [--beaker_gpus BEAKER_GPUS]
+                   [--beaker_priority BEAKER_PRIORITY] [--port PORT] [--tensor-parallel-size TENSOR_PARALLEL_SIZE] [--data-parallel-size DATA_PARALLEL_SIZE]
                    workspace
 
 Manager for running millions of PDFs through a batch inference pipeline
@@ -273,6 +273,10 @@ options:
   --markdown            Also write natural text to markdown files preserving the folder structure of the input pdfs
   --model MODEL         List of paths where you can find the model to convert this pdf. You can specify several different paths here, and the script will try to use the
                         one which is fastest to access
+  --gpu-memory-utilization GPU_MEMORY_UTILIZATION
+                        Fraction of VRAM vLLM may pre-allocate for KV-cache (passed through to vllm serve).
+  --max_model_len MAX_MODEL_LEN
+                        Upper bound (tokens) vLLM will allocate KV-cache for; passed through to vllm serve as --max-model-len.
   --model_max_context MODEL_MAX_CONTEXT
                         Maximum context length that the model was fine tuned under
   --model_chat_template MODEL_CHAT_TEMPLATE
