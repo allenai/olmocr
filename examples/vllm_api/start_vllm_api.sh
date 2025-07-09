@@ -36,7 +36,7 @@ source .venv/bin/activate
 
 echo "📦 Installing vllm and core dependencies..."
 # First, install vllm and its dependencies, which brings in torch
-uv pip install "vllm~=0.9.1" --torch-backend=auto huggingface-hub
+uv pip install "vllm~=0.9.1" --torch-backend=auto huggingface-hub openai PyMuPDF Pillow
 
 
 # --- Optional: Install flashinfer for performance ---
