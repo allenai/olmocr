@@ -37,13 +37,28 @@ source .venv/bin/activate
 echo "📦 Installing/updating dependencies (vllm, huggingface_hub)..."
 uv pip install vllm --torch-backend=auto huggingface-hub
 
+# --- Optional: Install flashinfer for performance ---
+# Uncomment the line below to install flashinfer.
+# echo "🚀 (Optional) Installing flashinfer for faster inference..."
+uv pip install https://download.pytorch.org/whl/cu128/flashinfer/flashinfer_python-0.2.5%2Bcu128torch2.7-cp38-abi3-linux_x86_64.whl 
+
 # --- Hugging Face Login ---
-echo "🔑 Logging into Hugging Face..."
-if [ -z "$HUGGING_FACE_HUB_TOKEN" ]; then
-  huggingface-cli login
+echo "🔑 Checking Hugging Face login status..."
+
+# Use 'whoami' to check login. If the command fails, then prompt for login.
+# The >/dev/null 2>&1 part suppresses command output so it's not noisy.
+if ! huggingface-cli whoami >/dev/null 2>&1; then
+  echo "⚠️ Not logged in. Please provide your Hugging Face token."
+  # Use an environment variable if it exists, otherwise prompt interactively.
+  if [ -n "$HUGGING_FACE_HUB_TOKEN" ]; then
+    huggingface-cli login --token $HUGGING_FACE_HUB_TOKEN
+  else
+    huggingface-cli login
+  fi
 else
-  huggingface-cli login --token $HUGGING_FACE_HUB_TOKEN
+  echo "✅ Already logged in to Hugging Face."
 fi
+
 
 # --- Run VLLM Server ---
 echo "Starting VLLM server..."
