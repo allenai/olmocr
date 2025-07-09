@@ -8,7 +8,6 @@ This project contains scripts to automate the setup and execution of a [VLLM](ht
 
 Before you begin, ensure you have the following installed and configured:
 
-  * **Git**: For version control.
   * **uv**: A fast Python package installer and resolver.
   * **Hugging Face Account**: You need an account and a [User Access Token](https://huggingface.co/settings/tokens) with `write` permissions.
 
@@ -19,7 +18,7 @@ Before you begin, ensure you have the following installed and configured:
 1.  **Clone the Repository** (if applicable)
     ```bash
     git clone git@github.com:allenai/olmocr.git
-    cd olmocr
+    cd olmocr/examples/vllm_api
     ```
 2.  **Make Scripts Executable**
     Give execution permissions to the shell scripts in this directory.

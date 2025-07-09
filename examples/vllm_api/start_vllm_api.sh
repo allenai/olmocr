@@ -34,13 +34,15 @@ fi
 # Activate the virtual environment
 source .venv/bin/activate
 
-echo "📦 Installing/updating dependencies (vllm, huggingface_hub)..."
-uv pip install vllm --torch-backend=auto huggingface-hub
+echo "📦 Installing vllm and core dependencies..."
+# First, install vllm and its dependencies, which brings in torch
+uv pip install "vllm~=0.9.1" --torch-backend=auto huggingface-hub
+
 
 # --- Optional: Install flashinfer for performance ---
 # Uncomment the line below to install flashinfer.
 # echo "🚀 (Optional) Installing flashinfer for faster inference..."
-uv pip install https://download.pytorch.org/whl/cu128/flashinfer/flashinfer_python-0.2.5%2Bcu128torch2.7-cp38-abi3-linux_x86_64.whl 
+# uv pip install https://download.pytorch.org/whl/cu128/flashinfer/flashinfer_python-0.2.5%2Bcu128torch2.7-cp38-abi3-linux_x86_64.whl 
 
 # --- Hugging Face Login ---
 echo "🔑 Checking Hugging Face login status..."
