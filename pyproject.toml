@@ -133,6 +133,8 @@ olmocr = [
     "py.typed",
     "viewer/*.html",
     "eval/*.html",
+    "bench/katex/*.js",
+    "bench/katex/*.css",
 ]
 
 [tool.setuptools.dynamic]
