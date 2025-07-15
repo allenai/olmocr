@@ -6,7 +6,7 @@ pypdfium2
 lingua-language-detector
 Pillow
 ruff
-mypy>=1.0,<1.5
+mypy>=1.0,<1.18
 black>=23.0,<24.0
 isort>=5.12,<5.13
 pytest
