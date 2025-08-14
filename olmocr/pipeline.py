@@ -92,6 +92,7 @@ get_pdf_filter = cache(lambda: PdfFilter(languages_to_keep={Language.ENGLISH, No
 
 # Specify a default port, but it can be overridden by args
 BASE_SERVER_PORT = 30024
+BASE_SERVER_URL = None  # Will be set if using external vLLM server
 
 
 @dataclass(frozen=True)
@@ -213,7 +214,10 @@ async def apost(url, json_data):
 
 
 async def process_page(args, worker_id: int, pdf_orig_path: str, pdf_local_path: str, page_num: int) -> PageResult:
-    COMPLETION_URL = f"http://localhost:{BASE_SERVER_PORT}/v1/chat/completions"
+    if BASE_SERVER_URL:
+        COMPLETION_URL = f"{BASE_SERVER_URL}/v1/chat/completions"
+    else:
+        COMPLETION_URL = f"http://localhost:{BASE_SERVER_PORT}/v1/chat/completions"
     MAX_RETRIES = args.max_page_retries
     MODEL_MAX_CONTEXT = 16384
     TEMPERATURE_BY_ATTEMPT = [0.1, 0.1, 0.2, 0.3, 0.5, 0.8, 0.9, 1.0]
@@ -295,9 +299,21 @@ async def process_page(args, worker_id: int, pdf_orig_path: str, pdf_local_path:
             # Now we want to do exponential backoff, and not count this as an actual page retry
             # Page retrys are supposed to be for fixing bad results from the model, but actual requests to vllm
             # are supposed to work. Probably this means that the server is just restarting
-            sleep_delay = 10 * (2**exponential_backoffs)
+            sleep_delay = min(60, 10 * (2**exponential_backoffs))  # Cap at 60 seconds
             exponential_backoffs += 1
-            logger.info(f"Sleeping for {sleep_delay} seconds on {pdf_orig_path}-{page_num} to allow server restart")
+            
+            # If using external server, check if it's still available
+            if BASE_SERVER_URL:
+                logger.info(f"Checking if external vLLM server at {BASE_SERVER_URL} is still available...")
+                try:
+                    if await vllm_server_ready(BASE_SERVER_URL, max_wait_seconds=30, expected_model="olmocr"):
+                        logger.info("External vLLM server is back online with correct model")
+                    else:
+                        logger.warning("External vLLM server health check failed or model mismatch")
+                except Exception as health_check_error:
+                    logger.warning(f"Failed to check external vLLM server health: {health_check_error}")
+            
+            logger.info(f"Sleeping for {sleep_delay} seconds on {pdf_orig_path}-{page_num} to allow server recovery")
             await asyncio.sleep(sleep_delay)
         except asyncio.CancelledError:
             logger.info(f"Process page {pdf_orig_path}-{page_num} cancelled")
@@ -724,10 +740,13 @@ async def vllm_server_host(model_name_or_path, args, semaphore, unknown_args=Non
         sys.exit(1)
 
 
-async def vllm_server_ready():
-    max_attempts = 300
+async def vllm_server_ready(external_url=None, max_wait_seconds=300, expected_model=None):
+    max_attempts = max_wait_seconds
     delay_sec = 1
-    url = f"http://localhost:{BASE_SERVER_PORT}/v1/models"
+    if external_url:
+        url = f"{external_url}/v1/models"
+    else:
+        url = f"http://localhost:{BASE_SERVER_PORT}/v1/models"
 
     for attempt in range(1, max_attempts + 1):
         try:
@@ -735,8 +754,27 @@ async def vllm_server_ready():
                 response = await session.get(url)
 
                 if response.status_code == 200:
+                    # Check if the expected model is loaded
+                    if expected_model:
+                        try:
+                            models_data = response.json()
+                            loaded_models = [model["id"] for model in models_data.get("data", [])]
+                            
+                            # Check if olmocr is in the loaded models (this is the served-model-name)
+                            if "olmocr" in loaded_models:
+                                logger.info(f"vllm server is ready with model: olmocr")
+                                return True
+                            else:
+                                logger.warning(f"Server is ready but model 'olmocr' not found. Loaded models: {loaded_models}")
+                                if external_url:
+                                    logger.error(f"External vLLM server at {external_url} does not have the 'olmocr' model loaded.")
+                                    logger.error(f"Please ensure the server was started with --served-model-name olmocr")
+                                    return False
+                        except Exception as e:
+                            logger.warning(f"Could not parse model list: {e}")
+                    
                     logger.info("vllm server is ready.")
-                    return
+                    return True
                 else:
                     logger.info(f"Attempt {attempt}: Unexpected status code {response.status_code}")
         except Exception:
@@ -1037,6 +1075,11 @@ async def main():
         help="Path where the model is located, allenai/olmOCR-7B-0825-FP8 is the default, can be local, s3, or hugging face.",
         default="allenai/olmOCR-7B-0825-FP8",
     )
+    parser.add_argument(
+        "--vllm-url",
+        help="URL of an external vLLM server to use instead of starting one locally (e.g., http://localhost:30024)",
+        default=None,
+    )
 
     # More detailed config options, usually you shouldn't have to change these
     parser.add_argument("--workspace_profile", help="S3 configuration profile for accessing the workspace", default=None)
@@ -1083,9 +1126,10 @@ async def main():
     )
 
     global workspace_s3, pdf_s3
-    # set the global BASE_SERVER_PORT from args
-    global BASE_SERVER_PORT
+    # set the global BASE_SERVER_PORT and URL from args
+    global BASE_SERVER_PORT, BASE_SERVER_URL
     BASE_SERVER_PORT = args.port
+    BASE_SERVER_URL = args.vllm_url
 
     # setup the job to work in beaker environment, load secrets, adjust logging, etc.
     if "BEAKER_JOB_NAME" in os.environ:
@@ -1199,30 +1243,68 @@ async def main():
         submit_beaker_job(args)
         return
 
-    # If you get this far, then you are doing inference and need a GPU
-    # check_sglang_version()
-    check_torch_gpu_available()
-
-    logger.info(f"Starting pipeline with PID {os.getpid()}")
-
-    # Download the model before you do anything else
-    model_name_or_path = await download_model(args.model)
-
+    # If using external vLLM server, skip GPU check and model download
+    if args.vllm_url:
+        logger.info(f"Using external vLLM server at {args.vllm_url}")
+        logger.info(f"Starting pipeline with PID {os.getpid()}")
+        
+        # Wait for external server to be ready with retries
+        logger.info("Checking if external vLLM server is ready and has the correct model...")
+        max_connection_attempts = 10
+        server_ready = False
+        
+        for attempt in range(max_connection_attempts):
+            try:
+                # Check if server is ready AND has the expected model
+                if await vllm_server_ready(args.vllm_url, max_wait_seconds=30, expected_model="olmocr"):
+                    logger.info("External vLLM server is ready with the correct model")
+                    server_ready = True
+                    break
+                else:
+                    logger.error(f"External vLLM server is running but doesn't have the 'olmocr' model.")
+                    logger.error(f"Please restart the server with --served-model-name olmocr")
+                    sys.exit(1)
+            except Exception as e:
+                logger.warning(f"Attempt {attempt + 1}/{max_connection_attempts} failed to connect to vLLM server: {e}")
+                if attempt < max_connection_attempts - 1:
+                    wait_time = min(30, 5 * (2 ** attempt))  # Exponential backoff, max 30s
+                    logger.info(f"Waiting {wait_time} seconds before retrying...")
+                    await asyncio.sleep(wait_time)
+                else:
+                    logger.error(f"Failed to connect to external vLLM server at {args.vllm_url} after {max_connection_attempts} attempts")
+                    sys.exit(1)
+        
+        if not server_ready:
+            logger.error("Could not establish connection to external vLLM server")
+            sys.exit(1)
+    else:
+        # Original behavior: check GPU and start local vLLM server
+        # check_sglang_version()
+        check_torch_gpu_available()
+        
+        logger.info(f"Starting pipeline with PID {os.getpid()}")
+        
+        # Download the model before you do anything else
+        model_name_or_path = await download_model(args.model)
+    
     # Initialize the work queue
     qsize = await work_queue.initialize_queue()
 
     if qsize == 0:
         logger.info("No work to do, exiting")
         return
+        
     # Create a semaphore to control worker access
     # We only allow one worker to move forward with requests, until the server has no more requests in its queue
     # This lets us get full utilization by having many workers, but also to be outputting dolma docs as soon as possible
     # As soon as one worker is no longer saturating the gpu, the next one can start sending requests
     semaphore = asyncio.Semaphore(1)
-
-    vllm_server = asyncio.create_task(vllm_server_host(model_name_or_path, args, semaphore, unknown_args))
-
-    await vllm_server_ready()
+    
+    # Only start local vLLM server if not using external URL
+    vllm_server = None
+    if not args.vllm_url:
+        vllm_server = asyncio.create_task(vllm_server_host(model_name_or_path, args, semaphore, unknown_args))
+        await vllm_server_ready()
 
     metrics_task = asyncio.create_task(metrics_reporter(work_queue))
 
@@ -1238,11 +1320,16 @@ async def main():
     # Wait for server to stop
     process_pool.shutdown(wait=False)
 
-    vllm_server.cancel()
+    # Only cancel vllm_server if we started it locally
+    if vllm_server:
+        vllm_server.cancel()
     metrics_task.cancel()
 
     # Wait for cancelled tasks to complete
-    await asyncio.gather(vllm_server, metrics_task, return_exceptions=True)
+    tasks_to_gather = [metrics_task]
+    if vllm_server:
+        tasks_to_gather.append(vllm_server)
+    await asyncio.gather(*tasks_to_gather, return_exceptions=True)
 
     # Output final metrics summary
     metrics_summary = metrics.get_metrics_summary()
