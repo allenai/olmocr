@@ -372,12 +372,24 @@ async def process_pdf(args, worker_id: int, pdf_orig_path: str):
         page_results = []
 
         try:
-            async with asyncio.TaskGroup() as tg:
-                for page_num in range(1, num_pages + 1):
-                    task = tg.create_task(process_page(args, worker_id, pdf_orig_path, tf.name, page_num))
-                    page_tasks.append(task)
-
-            # Collect the results from the entire task group, assuming no exceptions
+            # Process pages in batches to avoid overwhelming vLLM
+            batch_size = args.pages_per_batch
+            
+            for batch_start in range(1, num_pages + 1, batch_size):
+                batch_end = min(batch_start + batch_size, num_pages + 1)
+                batch_tasks = []
+                
+                # Process one batch of pages
+                async with asyncio.TaskGroup() as tg:
+                    for page_num in range(batch_start, batch_end):
+                        task = tg.create_task(process_page(args, worker_id, pdf_orig_path, tf.name, page_num))
+                        batch_tasks.append(task)
+                        page_tasks.append(task)
+                
+                # Log batch progress
+                logger.debug(f"Completed batch {batch_start}-{batch_end-1} for {pdf_orig_path}")
+            
+            # Collect all results
             page_results = [task.result() for task in page_tasks]
 
             num_fallback_pages = sum(page_result.is_fallback for page_result in page_results)
@@ -676,10 +688,12 @@ async def vllm_server_task(model_name_or_path, args, semaphore, unknown_args=Non
                 await asyncio.sleep(1)
 
                 # Check if we should release the semaphore
+                # Use minimum queue threshold or percentage of peak, whichever is larger
+                queue_threshold = max(args.min_queue_threshold, int(peak_running_req * args.queue_threshold_percent))
                 should_release = (
                     server_printed_ready_message
-                    and last_queue_req <= int(peak_running_req * 0.1)
-                    and time.time() - last_semaphore_release > 30
+                    and last_queue_req <= queue_threshold
+                    and time.time() - last_semaphore_release > args.semaphore_release_interval
                     and semaphore.locked()
                     and (last_running_req == 0 or running_reqs_decreased)
                 )
@@ -1058,6 +1072,16 @@ async def main():
     parser.add_argument("--target_longest_image_dim", type=int, help="Dimension on longest side to use for rendering the pdf pages", default=1288)
     parser.add_argument("--target_anchor_text_len", type=int, help="Maximum amount of anchor text to use (characters), not used for new models", default=-1)
     parser.add_argument("--guided_decoding", action="store_true", help="Enable guided decoding for model YAML type outputs")
+    
+    # Backpressure control arguments
+    parser.add_argument("--min_queue_threshold", type=int, default=50, 
+                       help="Minimum queue size to allow before releasing semaphore (default: 50)")
+    parser.add_argument("--queue_threshold_percent", type=float, default=0.1,
+                       help="Release semaphore when queue is below this percent of peak (default: 0.1)")
+    parser.add_argument("--semaphore_release_interval", type=int, default=5,
+                       help="Seconds between semaphore release checks (default: 5)")
+    parser.add_argument("--pages_per_batch", type=int, default=10,
+                       help="Number of pages to process in each batch (default: 10)")
 
     vllm_group = parser.add_argument_group(
         "VLLM arguments", "These arguments are passed to vLLM. Any unrecognized arguments are also automatically forwarded to vLLM."
