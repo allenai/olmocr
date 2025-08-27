@@ -305,6 +305,96 @@ def extract_code_block(initial_response):
     return None
 
 
+def embed_image_cutouts(html_content, image_base64):
+    """
+    Process HTML content to replace image placeholder divs with actual base64 encoded image cutouts.
+    
+    Args:
+        html_content: The HTML content with placeholder divs for images
+        image_base64: The base64 encoded original page image
+    
+    Returns:
+        Modified HTML with embedded base64 image cutouts
+    """
+    import base64
+    import io
+    from PIL import Image
+    
+    # Parse the HTML
+    soup = BeautifulSoup(html_content, 'html.parser')
+    
+    # Decode the original image
+    try:
+        image_data = base64.b64decode(image_base64)
+        original_image = Image.open(io.BytesIO(image_data))
+        page_width = original_image.width
+        page_height = original_image.height
+    except Exception as e:
+        print(f"Error decoding original image: {e}")
+        return html_content
+    
+    # Find all image placeholder divs
+    image_divs = soup.find_all('div', class_='image')
+    
+    for img_div in image_divs:
+        try:
+            # Extract bounding box data - expecting percentages
+            x_percent = float(img_div.get('data-x', '0').rstrip('%'))
+            y_percent = float(img_div.get('data-y', '0').rstrip('%'))
+            width_percent = float(img_div.get('data-width', '0').rstrip('%'))
+            height_percent = float(img_div.get('data-height', '0').rstrip('%'))
+            description = img_div.get('data-description', 'Image')
+            
+            # Skip if invalid dimensions
+            if width_percent <= 0 or height_percent <= 0:
+                continue
+            
+            # Convert percentages to pixels
+            x = int(x_percent * page_width / 100)
+            y = int(y_percent * page_height / 100)
+            width = int(width_percent * page_width / 100)
+            height = int(height_percent * page_height / 100)
+            
+            # Calculate crop box (left, upper, right, lower)
+            crop_box = (x, y, x + width, y + height)
+            
+            # Ensure crop box is within image bounds
+            crop_box = (
+                max(0, min(crop_box[0], page_width)),
+                max(0, min(crop_box[1], page_height)),
+                max(0, min(crop_box[2], page_width)),
+                max(0, min(crop_box[3], page_height))
+            )
+            
+            # Skip if the crop box has no area
+            if crop_box[2] <= crop_box[0] or crop_box[3] <= crop_box[1]:
+                continue
+            
+            # Crop the image
+            cropped_image = original_image.crop(crop_box)
+            
+            # Convert cropped image to base64
+            buffered = io.BytesIO()
+            cropped_image.save(buffered, format="PNG")
+            cropped_base64 = base64.b64encode(buffered.getvalue()).decode('utf-8')
+            
+            # Create an img tag with the base64 data
+            img_tag = soup.new_tag('img')
+            img_tag['src'] = f'data:image/png;base64,{cropped_base64}'
+            img_tag['alt'] = description
+            # Use percentage-based width for responsive sizing
+            img_tag['style'] = f'width:{width_percent}%;max-width:{width}px;height:auto;'
+            
+            # Replace the div with the img tag
+            img_div.replace_with(img_tag)
+            
+        except Exception as e:
+            print(f"Error processing image div: {e}")
+            continue
+    
+    return str(soup)
+
+
 async def generate_html_from_image(client, image_base64):
     """Call Claude API to generate HTML from an image using a multi-step prompting strategy."""
     global total_input_tokens, total_output_tokens
@@ -327,7 +417,8 @@ async def generate_html_from_image(client, image_base64):
                             "1. How many columns does the document have? Is it single-column, two-column, three-column, or a mixed layout?\n"
                             "2. What are the main sections and content types (headings, paragraphs, lists, tables, images, etc.)?\n"
                             "3. Does it have headers, footers, page numbers, or other special elements?\n"
-                            "4. Is there any complex formatting that would be challenging to reproduce in HTML?\n\n"
+                            "4. Is there any complex formatting that would be challenging to reproduce in HTML?\n"
+                            "5. Finally, include a list of any images/figures/graphics, with an alt-text description of each one, as well as a bounding box for that image. The bounding box should be specified as PERCENTAGES of the page dimensions: x%, y%, width%, height% (e.g., x: 10%, y: 20%, width: 30%, height: 15%).\n\n"
                             "Please be very precise about the number of columns and how they're arranged.",
                         },
                     ],
@@ -362,7 +453,13 @@ async def generate_html_from_image(client, image_base64):
                             "Important requirements:\n"
                             "1. Use appropriate HTML tags for elements like headings, paragraphs, lists, tables, etc.\n"
                             "2. Use the <header> and <footer> tags to represent content at the top/bottom which would not normally be part of the main content, such as page numbers, etc.\n"
-                            "3. Use a placeholder <div> tag with class 'image' which will render as a grey box with black outline to make sure images have their original size, shape, and position on the page. Include an alt-text of the original image as a 'data-description' attribute on the tag. Include 'data-x', 'data-y', 'data-width', 'data-height' attributes which specify where the image was found in the original document.\n"
+                            "3. Use a placeholder <div> tag with class 'image' for each image/figure/graphic in the document. Include:\n"
+                            "   - 'data-description' attribute with alt-text describing the image\n"
+                            "   - 'data-x' attribute with the x position as a PERCENTAGE of page width (e.g., '10%')\n"
+                            "   - 'data-y' attribute with the y position as a PERCENTAGE of page height (e.g., '20%')\n"
+                            "   - 'data-width' attribute with the width as a PERCENTAGE of page width (e.g., '30%')\n"
+                            "   - 'data-height' attribute with the height as a PERCENTAGE of page height (e.g., '15%')\n"
+                            "   Example: <div class=\"image\" data-description=\"Company logo\" data-x=\"10%\" data-y=\"5%\" data-width=\"25%\" data-height=\"10%\"></div>\n"
                             "4. Render any math equations and Latex inline using either \\[ \\] or \\( \\) delimeters.\n"
                             "5. CRITICAL: If the document has a multi-column layout, you MUST preserve the exact same number of columns in your HTML. Use CSS flexbox or grid to create the columns.\n"
                             "6. Focus on creating valid, accessible HTML that preserves the appearance and formatting of the original page as closely as possible.\n"
@@ -386,7 +483,13 @@ async def generate_html_from_image(client, image_base64):
             total_input_tokens += initial_response.usage.input_tokens
             total_output_tokens += initial_response.usage.output_tokens
 
-        return extract_code_block(initial_html)
+        html_code = extract_code_block(initial_html)
+        
+        # Step 3: Process the HTML to extract images based on bounding boxes
+        if html_code:
+            html_code = embed_image_cutouts(html_code, image_base64)
+        
+        return html_code
     except Exception as e:
         print(f"Error calling Claude API: {e}")
         return None
