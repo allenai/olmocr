@@ -96,7 +96,7 @@ commands = [
     "pip install transformers==4.52.4",
     "pip install flash-attn==2.8.0.post2 --no-build-isolation",
     "pip install s5cmd",
-    "s5cmd sync s3://ai2-oe-data/jakep/olmocr/olmOCR-mix-0825/processed_* /data/olmOCR-mix-0825/",
+    "s5cmd sync s3://ai2-oe-data/jakep/olmocr/olmOCR-mix-0825-gpt4o/processed_* /data/olmOCR-mix-0825-gpt4o/",
     f"python -m olmocr.train.train --config {config}"
 ]
 
