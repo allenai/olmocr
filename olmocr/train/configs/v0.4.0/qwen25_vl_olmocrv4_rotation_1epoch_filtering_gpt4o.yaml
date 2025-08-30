@@ -28,7 +28,7 @@ dataset:
 
   train:
     - name: processed_01_books_train_iabooks
-      root_dir: /data/olmOCR-mix-0825-gpt4o/processed_01_books_train_iabooks/
+      root_dir: /data/olmOCR-mix-0825-gpt4o/processed_01_books_train_books/
       pipeline: &basic_pipeline
         - name: FrontMatterParser
           front_matter_class: PageResponse
