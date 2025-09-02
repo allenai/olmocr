@@ -912,7 +912,7 @@ def main():
 
         # Vllm setup to speed up generation
         use_vllm=True,
-        vllm_mode="colocate",
+        vllm_mode="server",
         vllm_gpu_memory_utilization=0.15,
         log_completions=True,
     )
