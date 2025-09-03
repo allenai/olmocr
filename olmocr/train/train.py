@@ -11,10 +11,12 @@ from typing import Any, Dict, Optional
 
 import numpy as np
 import torch
+import torch.distributed as dist
 import wandb
 from torch.amp import autocast
 from torch.optim import AdamW
 from torch.utils.data import ConcatDataset, DataLoader
+from torch.utils.data.distributed import DistributedSampler
 from tqdm import tqdm
 from transformers import (
     AutoProcessor,
@@ -102,35 +104,78 @@ def save_checkpoint(
     output_dir: str,
     save_total_limit: Optional[int] = None,
 ):
-    """Save model, optimizer, scheduler, and training state."""
-    checkpoint_dir = os.path.join(output_dir, f"checkpoint-{global_step}")
-    os.makedirs(checkpoint_dir, exist_ok=True)
+    """Save model, optimizer, scheduler, and training state (FSDP-aware)."""
+    # Only rank 0 performs file I/O when distributed
+    is_distributed = dist.is_available() and dist.is_initialized()
+    rank = dist.get_rank() if is_distributed else 0
 
-    # Save model
-    model.save_pretrained(checkpoint_dir)
+    checkpoint_dir = None
+    if rank == 0:
+        checkpoint_dir = os.path.join(output_dir, f"checkpoint-{global_step}")
+        os.makedirs(checkpoint_dir, exist_ok=True)
+    if is_distributed:
+        dist.barrier()
+
+    # Determine if model is FSDP wrapped
+    using_fsdp = False
+    try:
+        from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
+        using_fsdp = isinstance(model, FSDP)
+    except Exception:
+        using_fsdp = False
+
+    if using_fsdp:
+        from torch.distributed.fsdp import StateDictType, FullStateDictConfig, FullyShardedDataParallel as FSDP
+
+        # Gather full state dict on rank 0
+        with FSDP.state_dict_type(
+            model,
+            StateDictType.FULL_STATE_DICT,
+            FullStateDictConfig(offload_to_cpu=True, rank0_only=True),
+        ):
+            full_state_dict = model.state_dict()
+        if rank == 0:
+            # Unwrap to underlying HF module for save_pretrained
+            base_model = model.module
+            base_model.save_pretrained(checkpoint_dir, state_dict=full_state_dict)
+    else:
+        if rank == 0:
+            model.save_pretrained(checkpoint_dir)
 
     # Save optimizer and scheduler
-    torch.save(optimizer.state_dict(), os.path.join(checkpoint_dir, "optimizer.pt"))
-    torch.save(lr_scheduler.state_dict(), os.path.join(checkpoint_dir, "scheduler.pt"))
+    if using_fsdp:
+        from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 
-    # Save training state
-    state = {
-        "epoch": epoch,
-        "global_step": global_step,
-        "samples_seen": samples_seen,
-        "best_metric": best_metric,
-    }
-    torch.save(state, os.path.join(checkpoint_dir, "training_state.pt"))
+        optim_state = FSDP.optim_state_dict(model, optimizer)
+        if rank == 0:
+            torch.save(optim_state, os.path.join(checkpoint_dir, "optimizer.pt"))
+    else:
+        if rank == 0:
+            torch.save(optimizer.state_dict(), os.path.join(checkpoint_dir, "optimizer.pt"))
 
-    logger.info(f"Saved checkpoint to {checkpoint_dir}")
+    if rank == 0:
+        torch.save(lr_scheduler.state_dict(), os.path.join(checkpoint_dir, "scheduler.pt"))
+        state = {
+            "epoch": epoch,
+            "global_step": global_step,
+            "samples_seen": samples_seen,
+            "best_metric": best_metric,
+        }
+        torch.save(state, os.path.join(checkpoint_dir, "training_state.pt"))
+        logger.info(f"Saved checkpoint to {checkpoint_dir}")
 
-    # Enforce save_total_limit by removing oldest checkpoints
-    if save_total_limit is not None and save_total_limit > 0:
-        checkpoints = sorted([d for d in os.listdir(output_dir) if d.startswith("checkpoint-")], key=lambda x: int(x.split("-")[1]))
-        while len(checkpoints) > save_total_limit:
-            oldest = checkpoints.pop(0)
-            shutil.rmtree(os.path.join(output_dir, oldest))
-            logger.info(f"Deleted old checkpoint: {oldest}")
+        # Enforce save_total_limit by removing oldest checkpoints
+        if save_total_limit is not None and save_total_limit > 0:
+            checkpoints = sorted(
+                [d for d in os.listdir(output_dir) if d.startswith("checkpoint-")],
+                key=lambda x: int(x.split("-")[1]),
+            )
+            while len(checkpoints) > save_total_limit:
+                oldest = checkpoints.pop(0)
+                shutil.rmtree(os.path.join(output_dir, oldest))
+                logger.info(f"Deleted old checkpoint: {oldest}")
+    if is_distributed:
+        dist.barrier()
 
 
 def load_checkpoint(
@@ -141,15 +186,30 @@ def load_checkpoint(
     checkpoint_dir: str,
     device: torch.device,
 ) -> tuple[torch.nn.Module, Dict[str, Any]]:
-    """Load model, optimizer, scheduler, and training state from checkpoint."""
+    """Load model, optimizer, scheduler, and training state from checkpoint.
+
+    Note: For FSDP, this loads the base HF model weights. Optimizer state
+    should be loaded after wrapping with FSDP using FSDP.optim_state_dict_to_load.
+    """
     model = model_class.from_pretrained(checkpoint_dir, **init_kwargs)
     model.to(device)
 
-    optimizer.load_state_dict(torch.load(os.path.join(checkpoint_dir, "optimizer.pt"), map_location=device))
-    lr_scheduler.load_state_dict(torch.load(os.path.join(checkpoint_dir, "scheduler.pt"), map_location=device))
+    opt_path = os.path.join(checkpoint_dir, "optimizer.pt")
+    if os.path.exists(opt_path):
+        try:
+            optimizer.load_state_dict(torch.load(opt_path, map_location=device))
+        except Exception:
+            # Likely an FSDP optimizer state; will be handled after wrapping
+            pass
+
+    sched_path = os.path.join(checkpoint_dir, "scheduler.pt")
+    if os.path.exists(sched_path):
+        lr_scheduler.load_state_dict(torch.load(sched_path, map_location=device))
 
     state = torch.load(os.path.join(checkpoint_dir, "training_state.pt"), map_location=device)
-    logger.info(f"Resumed from checkpoint: {checkpoint_dir} at epoch {state['epoch']:.2f}, step {state['global_step']}, samples seen {state['samples_seen']}")
+    logger.info(
+        f"Resumed from checkpoint: {checkpoint_dir} at epoch {state['epoch']:.2f}, step {state['global_step']}, samples seen {state['samples_seen']}"
+    )
     return model, state
 
 
@@ -161,6 +221,8 @@ def evaluate_model(
     """Evaluate on all eval datasets and return average loss per dataset."""
     model.eval()
     eval_metrics = {}
+
+    is_distributed = dist.is_available() and dist.is_initialized()
 
     for dataset_name, dataloader in eval_dataloaders.items():
         total_loss = 0.0
@@ -177,9 +239,19 @@ def evaluate_model(
                 total_loss += outputs.loss.item()
                 num_batches += 1
 
+        if is_distributed:
+            # Sum losses and counts across ranks
+            loss_tensor = torch.tensor([total_loss], dtype=torch.float64, device=device)
+            count_tensor = torch.tensor([num_batches], dtype=torch.float64, device=device)
+            dist.all_reduce(loss_tensor, op=dist.ReduceOp.SUM)
+            dist.all_reduce(count_tensor, op=dist.ReduceOp.SUM)
+            total_loss = float(loss_tensor.item())
+            num_batches = int(count_tensor.item())
+
         avg_loss = total_loss / num_batches if num_batches > 0 else 0.0
         eval_metrics[f"eval_{dataset_name}_loss"] = avg_loss
-        logger.info(f"Eval {dataset_name} loss: {avg_loss:.4f}")
+        if (not is_distributed) or dist.get_rank() == 0:
+            logger.info(f"Eval {dataset_name} loss: {avg_loss:.4f}")
 
     # Compute overall eval loss as average across datasets (or customize as needed)
     if eval_metrics:
@@ -195,6 +267,7 @@ def create_train_dataloader(
     data_collator,
     seed_worker,
     epoch_num: int = 0,
+    sampler: Optional[torch.utils.data.Sampler] = None,
 ) -> DataLoader:
     """Create a training dataloader with epoch-specific shuffling.
     
@@ -220,12 +293,14 @@ def create_train_dataloader(
     return DataLoader(
         train_dataset,
         batch_size=config.training.per_device_train_batch_size,
-        shuffle=True,
+        shuffle=(sampler is None),
+        sampler=sampler,
         collate_fn=data_collator,
         num_workers=config.training.dataloader_num_workers,
         drop_last=config.training.dataloader_drop_last,
         worker_init_fn=seed_worker,
-        generator=epoch_generator,
+        generator=None if sampler is not None else epoch_generator,
+        pin_memory=True,
     )
 
 
@@ -251,8 +326,21 @@ def main():
         os.environ["WANDB_PROJECT"] = config.project_name
         logger.info(f"Setting WANDB_PROJECT to: {config.project_name}")
 
-    # Initialize wandb if reporting to it
-    if "wandb" in config.training.report_to:
+    # Distributed init (torchrun)
+    is_distributed = False
+    local_rank = int(os.environ.get("LOCAL_RANK", "-1"))
+    world_size = int(os.environ.get("WORLD_SIZE", "1"))
+    rank = int(os.environ.get("RANK", "0"))
+    if world_size > 1 or local_rank != -1:
+        is_distributed = True
+        if torch.cuda.is_available():
+            torch.cuda.set_device(local_rank)
+        dist.init_process_group(backend="nccl")
+        if rank == 0:
+            logger.info(f"Initialized distributed: rank={rank}, local_rank={local_rank}, world_size={world_size}")
+
+    # Initialize wandb if reporting to it (rank 0 only)
+    if (not is_distributed or rank == 0) and ("wandb" in config.training.report_to):
         wandb.init(project=config.project_name, name=config.run_name, config=config.to_dict())
 
     # Load processor for tokenization
@@ -264,7 +352,7 @@ def main():
     # Model init kwargs to reuse for loading checkpoints
     model_init_kwargs = {
         "torch_dtype": getattr(torch, config.model.torch_dtype) if config.model.torch_dtype != "auto" else "auto",
-        "device_map": config.model.device_map,
+        "device_map": None if is_distributed else config.model.device_map,
         "trust_remote_code": config.model.trust_remote_code,
         "attn_implementation": config.model.attn_implementation if config.model.use_flash_attention else None,
     }
@@ -354,11 +442,14 @@ def main():
         random.seed(worker_seed)
 
     # Device setup
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    if torch.cuda.is_available():
+        device = torch.device(f"cuda:{local_rank}") if is_distributed else torch.device("cuda")
+    else:
+        device = torch.device("cpu")
     model.to(device)
 
-    # Apply torch compile if enabled
-    if config.training.torch_compile:
+    # Apply torch compile if enabled (skip with distributed/FSDP)
+    if (not is_distributed) and config.training.torch_compile:
         logger.info(f"Compiling model with torch.compile (backend={config.training.torch_compile_backend}, mode={config.training.torch_compile_mode})")
         model = torch.compile(
             model,
@@ -389,6 +480,8 @@ def main():
             eps=float(config.training.adam_epsilon),
         )
     elif config.training.optim == "muon":
+        if is_distributed:
+            raise NotImplementedError("Muon optimizer is not supported with FSDP in this training script.")
         # Separate parameters for Muon (hidden matrices) and Adam (embeddings, scalars, head)
         hidden_matrix_params = [p for n, p in model.named_parameters() if p.ndim >= 2 and "embed" not in n and "lm_head" not in n]
         embed_params = [p for n, p in model.named_parameters() if "embed" in n]
@@ -424,8 +517,10 @@ def main():
         raise NotImplementedError(f"Optimizer {config.training.optim} not supported in custom loop")
 
     # Total training steps calculation
-    samples_per_step = config.training.per_device_train_batch_size * config.training.gradient_accumulation_steps
-    num_update_steps_per_epoch = math.ceil(len(train_dataset) / samples_per_step)
+    per_device_bs = config.training.per_device_train_batch_size
+    grad_accum = config.training.gradient_accumulation_steps
+    global_effective_batch = per_device_bs * (world_size if (dist.is_available() and dist.is_initialized()) else 1) * grad_accum
+    num_update_steps_per_epoch = math.ceil(len(train_dataset) / global_effective_batch)
     max_train_steps = int(math.ceil(config.training.num_train_epochs * num_update_steps_per_epoch))
     max_train_samples = int(math.ceil(config.training.num_train_epochs * len(train_dataset)))
 
@@ -441,49 +536,128 @@ def main():
     # Data collator
     data_collator = QwenDataCollator(max_token_len=config.training.collator_max_token_len)
 
-    # Resume from checkpoint if available
+    # Resume from checkpoint if available (distributed-aware)
     global_step = 0
     samples_seen = 0
     best_metric = float("inf") if not config.training.greater_is_better else -float("inf")
 
     if found_resumable_checkpoint:
-        model, state = load_checkpoint(model_class, model_init_kwargs, optimizer, lr_scheduler, found_resumable_checkpoint, device)
-        global_step = state["global_step"]
-        best_metric = state["best_metric"]
-        samples_seen = state["samples_seen"]
+        if is_distributed:
+            # In distributed, load model weights before wrapping, then load optimizer/scheduler after creation
+            model = model_class.from_pretrained(found_resumable_checkpoint, **model_init_kwargs)
+            model.to(device)
+            state = torch.load(os.path.join(found_resumable_checkpoint, "training_state.pt"), map_location="cpu")
+            global_step = state.get("global_step", 0)
+            best_metric = state.get("best_metric", best_metric)
+            samples_seen = state.get("samples_seen", 0)
+            if rank == 0:
+                logger.info(
+                    f"Resuming (FSDP) from {found_resumable_checkpoint}: epoch {state.get('epoch', 0):.2f}, step {global_step}, samples {samples_seen}"
+                )
+        else:
+            model, state = load_checkpoint(
+                model_class, model_init_kwargs, optimizer, lr_scheduler, found_resumable_checkpoint, device
+            )
+            global_step = state["global_step"]
+            best_metric = state["best_metric"]
+            samples_seen = state["samples_seen"]
+
+    
+
+    # If distributed, wrap with FSDP after potential weight load
+    if is_distributed:
+        from torch.distributed.fsdp import (
+            FullyShardedDataParallel as FSDP,
+            MixedPrecision,
+            ShardingStrategy,
+        )
+        from torch.distributed.fsdp.wrap import size_based_auto_wrap_policy
+
+        mp_dtype = torch.bfloat16 if (str(getattr(model, 'dtype', 'torch.float32')) == 'torch.bfloat16' or config.model.torch_dtype == 'bfloat16') else torch.float16
+        mixed_precision = MixedPrecision(param_dtype=mp_dtype, reduce_dtype=mp_dtype, buffer_dtype=mp_dtype)
+        auto_wrap_policy = size_based_auto_wrap_policy(min_num_params=10_000_000)
+
+        model = FSDP(
+            model,
+            sharding_strategy=ShardingStrategy.FULL_SHARD,
+            auto_wrap_policy=auto_wrap_policy,
+            mixed_precision=mixed_precision,
+            device_id=device if device.type == 'cuda' else None,
+        )
+
+        # Load optimizer/scheduler states for FSDP resumes now that model and optimizer are set up
+        if found_resumable_checkpoint:
+            opt_path = os.path.join(found_resumable_checkpoint, "optimizer.pt")
+            if os.path.exists(opt_path):
+                try:
+                    optim_state = torch.load(opt_path, map_location="cpu")
+                    optim_state = FSDP.optim_state_dict_to_load(optimizer, optim_state, model)
+                    optimizer.load_state_dict(optim_state)
+                    if rank == 0:
+                        logger.info("Loaded optimizer state (FSDP)")
+                except Exception as e:
+                    if rank == 0:
+                        logger.warning(f"Could not load FSDP optimizer state: {e}")
+            sched_path = os.path.join(found_resumable_checkpoint, "scheduler.pt")
+            if os.path.exists(sched_path):
+                lr_scheduler.load_state_dict(torch.load(sched_path, map_location="cpu"))
+                if rank == 0:
+                    logger.info("Loaded scheduler state")
 
     # Create dataloaders - use epoch 0 initially (will be recreated with proper epoch if resuming)
     current_epoch_num = int(samples_seen / len(train_dataset)) if samples_seen > 0 else 0
+    if is_distributed:
+        train_sampler = DistributedSampler(
+            train_dataset,
+            num_replicas=world_size,
+            rank=rank,
+            shuffle=True,
+            seed=config.training.data_seed or 42,
+            drop_last=config.training.dataloader_drop_last,
+        )
+        train_sampler.set_epoch(current_epoch_num)
+    else:
+        train_sampler = None
     train_dataloader = create_train_dataloader(
         train_dataset,
         config,
         data_collator,
         seed_worker,
         epoch_num=current_epoch_num,
+        sampler=train_sampler,
     )
 
-    eval_dataloaders = {
-        name: DataLoader(
+    eval_dataloaders = {}
+    for name, dataset in eval_datasets.items():
+        if is_distributed:
+            eval_sampler = DistributedSampler(dataset, num_replicas=world_size, rank=rank, shuffle=False, drop_last=False)
+        else:
+            eval_sampler = None
+        eval_dataloaders[name] = DataLoader(
             dataset,
             batch_size=config.training.per_device_eval_batch_size,
-            shuffle=False,
+            shuffle=False if eval_sampler is not None else False,
+            sampler=eval_sampler,
             collate_fn=data_collator,
             num_workers=config.training.dataloader_num_workers,
             drop_last=False,
+            pin_memory=True,
         )
-        for name, dataset in eval_datasets.items()
-    }
 
     # Always evaluate on start
     metrics = evaluate_model(model, eval_dataloaders, device)
-    logger.info(f"Initial evaluation: {metrics}")
-    if "wandb" in config.training.report_to:
-        wandb.log(metrics, step=global_step)
+    if (not is_distributed) or rank == 0:
+        logger.info(f"Initial evaluation: {metrics}")
+        if "wandb" in config.training.report_to:
+            wandb.log(metrics, step=global_step)
 
     # Main training loop
     current_epoch = samples_seen / len(train_dataset)
-    logger.info(f"Starting training from epoch {current_epoch:.2f} (step {global_step}, samples {samples_seen}) to {config.training.num_train_epochs} epochs")
-    logger.info(f"Total training steps: {max_train_steps}, Total samples to process: {max_train_samples}")
+    if (not is_distributed) or rank == 0:
+        logger.info(
+            f"Starting training from epoch {current_epoch:.2f} (step {global_step}, samples {samples_seen}) to {config.training.num_train_epochs} epochs"
+        )
+        logger.info(f"Total training steps: {max_train_steps}, Total samples to process: {max_train_samples}")
 
     if samples_seen >= max_train_samples:
         logger.info("Training already completed based on samples seen!")
@@ -495,7 +669,7 @@ def main():
 
         # Create epoch iterator and skip samples if resuming
         epoch_iterator = iter(train_dataloader)
-        if samples_seen > 0:
+        if (not is_distributed) and samples_seen > 0:
             samples_to_skip = samples_seen % len(train_dataset)
             batches_to_skip = samples_to_skip // config.training.per_device_train_batch_size
             logger.info(f"Resuming training: skipping {batches_to_skip} batches ({samples_to_skip} samples) to reach position {samples_seen}")
@@ -519,27 +693,32 @@ def main():
                     epoch_iterator = iter(train_dataloader)
                     break
         
-        # Create progress bar
-        pbar = tqdm(total=max_train_samples - samples_seen, desc=f"Training from step {global_step}", unit="samples")
+        # Create progress bar (rank 0 only)
+        pbar = tqdm(total=max_train_samples - samples_seen, desc=f"Training from step {global_step}", unit="samples") if ((not is_distributed) or rank == 0) else None
 
+        micro_count = 0
         while samples_seen < max_train_samples and global_step < max_train_steps:
             try:
                 batch = next(epoch_iterator)
             except StopIteration:
                 # End of epoch, create new dataloader with fresh shuffle
                 current_epoch = samples_seen / len(train_dataset)
-                logger.info(f"Completed epoch {current_epoch:.2f}")
+                if (not is_distributed) or rank == 0:
+                    logger.info(f"Completed epoch {current_epoch:.2f}")
                 
                 # Increment epoch number for new shuffle seed
                 current_epoch_num += 1
                 
                 # Recreate dataloader with new generator for fresh shuffle
+                if is_distributed:
+                    train_sampler.set_epoch(current_epoch_num)
                 train_dataloader = create_train_dataloader(
                     train_dataset,
                     config,
                     data_collator,
                     seed_worker,
                     epoch_num=current_epoch_num,
+                    sampler=train_sampler,
                 )
                 epoch_iterator = iter(train_dataloader)
                 batch = next(epoch_iterator)
@@ -557,15 +736,26 @@ def main():
 
             accumulated_loss += outputs.loss.item()  # Use undivided loss for logging
             num_losses_accumulated += 1
-            samples_seen += config.training.per_device_train_batch_size
+            # Increment seen samples in global terms for progress/termination
+            samples_seen += config.training.per_device_train_batch_size * (world_size if is_distributed else 1)
+
+            micro_count += 1
 
             # Update progress bar
-            pbar.update(config.training.per_device_train_batch_size)
+            if pbar is not None:
+                pbar.update(config.training.per_device_train_batch_size * (world_size if is_distributed else 1))
 
             # Check if we should do a gradient update
-            if samples_seen % samples_per_step == 0 or samples_seen >= max_train_samples:
-                # Clip gradients
-                torch.nn.utils.clip_grad_norm_(model.parameters(), config.training.max_grad_norm)
+            if (micro_count % grad_accum == 0) or samples_seen >= max_train_samples:
+                # Clip gradients (FSDP-aware)
+                try:
+                    from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
+                    if isinstance(model, FSDP):
+                        FSDP.clip_grad_norm_(model.parameters(), config.training.max_grad_norm)
+                    else:
+                        torch.nn.utils.clip_grad_norm_(model.parameters(), config.training.max_grad_norm)
+                except Exception:
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), config.training.max_grad_norm)
 
                 # Step optimizer and scheduler
                 optimizer.step()
@@ -576,9 +766,10 @@ def main():
                 current_epoch = samples_seen / len(train_dataset)
 
                 # Update progress bar with current stats
-                current_lr = lr_scheduler.get_last_lr()[0]
-                avg_loss = accumulated_loss / num_losses_accumulated if num_losses_accumulated > 0 else 0
-                pbar.set_postfix({"loss": f"{avg_loss:.4f}", "lr": f"{current_lr:.2e}", "epoch": f"{current_epoch:.2f}", "step": global_step})
+                if pbar is not None:
+                    current_lr = lr_scheduler.get_last_lr()[0]
+                    avg_loss = accumulated_loss / num_losses_accumulated if num_losses_accumulated > 0 else 0
+                    pbar.set_postfix({"loss": f"{avg_loss:.4f}", "lr": f"{current_lr:.2e}", "epoch": f"{current_epoch:.2f}", "step": global_step})
 
                 # Logging
                 if config.training.logging_steps > 0 and global_step % config.training.logging_steps == 0:
@@ -589,9 +780,10 @@ def main():
                         "epoch": current_epoch,
                         "samples_seen": samples_seen,
                     }
-                    logger.info(f"Step {global_step}: epoch={current_epoch:.3f}, loss={avg_train_loss:.4f}, lr={lr_scheduler.get_last_lr()[0]:.2e}")
-                    if "wandb" in config.training.report_to:
-                        wandb.log(logs, step=global_step)
+                    if (not is_distributed) or rank == 0:
+                        logger.info(f"Step {global_step}: epoch={current_epoch:.3f}, loss={avg_train_loss:.4f}, lr={lr_scheduler.get_last_lr()[0]:.2e}")
+                        if "wandb" in config.training.report_to:
+                            wandb.log(logs, step=global_step)
 
                     accumulated_loss = 0.0
                     num_losses_accumulated = 0
@@ -599,9 +791,10 @@ def main():
                 # Evaluation
                 if config.training.eval_steps > 0 and global_step % config.training.eval_steps == 0 and global_step > 0:
                     metrics = evaluate_model(model, eval_dataloaders, device)
-                    logger.info(f"Evaluation at step {global_step}: {metrics}")
-                    if "wandb" in config.training.report_to:
-                        wandb.log(metrics, step=global_step)
+                    if (not is_distributed) or rank == 0:
+                        logger.info(f"Evaluation at step {global_step}: {metrics}")
+                        if "wandb" in config.training.report_to:
+                            wandb.log(metrics, step=global_step)
 
                     # Update best metric
                     current_metric = metrics.get(config.training.metric_for_best_model, None)
@@ -625,22 +818,31 @@ def main():
                 break
 
         # Close progress bar
-        pbar.close()
+        if pbar is not None:
+            pbar.close()
 
     # Save the final checkpoint with step number
-    logger.info(f"Saving final checkpoint at step {global_step}...")
+    if (not is_distributed) or rank == 0:
+        logger.info(f"Saving final checkpoint at step {global_step}...")
     save_checkpoint(model, optimizer, lr_scheduler, current_epoch, global_step, samples_seen, best_metric, full_output_dir, config.training.save_total_limit)
 
     # Log final training state
     final_epoch = samples_seen / len(train_dataset)
-    logger.info(f"Training completed at epoch {final_epoch:.3f}, step {global_step}, samples {samples_seen}")
+    if (not is_distributed) or rank == 0:
+        logger.info(f"Training completed at epoch {final_epoch:.3f}, step {global_step}, samples {samples_seen}")
 
     # Final evaluation
     final_metrics = evaluate_model(model, eval_dataloaders, device)
-    logger.info(f"Final evaluation metrics: {final_metrics}")
-    if "wandb" in config.training.report_to:
-        wandb.log(final_metrics, step=global_step)
-        wandb.finish()
+    if (not is_distributed) or rank == 0:
+        logger.info(f"Final evaluation metrics: {final_metrics}")
+        if "wandb" in config.training.report_to:
+            wandb.log(final_metrics, step=global_step)
+            wandb.finish()
+
+    # Distributed cleanup
+    if is_distributed:
+        dist.barrier()
+        dist.destroy_process_group()
 
 
 if __name__ == "__main__":
