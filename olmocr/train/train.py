@@ -571,11 +571,12 @@ def main():
             MixedPrecision,
             ShardingStrategy,
         )
+        from functools import partial
         from torch.distributed.fsdp.wrap import size_based_auto_wrap_policy
 
         mp_dtype = torch.bfloat16 if (str(getattr(model, 'dtype', 'torch.float32')) == 'torch.bfloat16' or config.model.torch_dtype == 'bfloat16') else torch.float16
         mixed_precision = MixedPrecision(param_dtype=mp_dtype, reduce_dtype=mp_dtype, buffer_dtype=mp_dtype)
-        auto_wrap_policy = size_based_auto_wrap_policy(min_num_params=10_000_000)
+        auto_wrap_policy = partial(size_based_auto_wrap_policy, min_num_params=10_000_000)
 
         model = FSDP(
             model,
