@@ -2,7 +2,7 @@
 
 # Project metadata
 project_name: olmocr-qwen-vl-training
-run_name: qwen2.5-vl-7b-olmocrv4_1epoch_promptv4_filtering_gpt4o
+run_name: qwen2.5-vl-7b-olmocrv4_1epoch_promptv4_filtering_gpt4o_onerun
 
 # Model configuration
 model:
