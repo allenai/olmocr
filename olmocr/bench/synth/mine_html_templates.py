@@ -485,7 +485,7 @@ async def generate_html_from_image(client, image_base64):
                             "4. Render any math equations and Latex inline using either \\[ \\] or \\( \\) delimeters.\n"
                             "5. CRITICAL: If the document has a multi-column layout, you MUST preserve the exact same number of columns in your HTML. Use CSS flexbox or grid to create the columns.\n"
                             "6. Focus on creating valid, accessible HTML that preserves the appearance and formatting of the original page as closely as possible.\n"
-                            f"7. The webpage will be viewed with a fixed viewport size of {png_width // 2} pixels wide by {png_height // 2} pixels tall.\n"
+                            f"7. The webpage will be viewed with a fixed viewport size of {png_width} pixels wide by {png_height} pixels tall.\n"
                             "8. For multi-column layouts, use explicit CSS. The most important aspect is preserving the column structure of the original document - this is critical.\n\n"
                             "Enclose your HTML in a ```html code block.",
                         },
@@ -607,7 +607,7 @@ async def render_pdf_with_playwright(html_content, output_pdf_path, png_width, p
         try:
             async with async_playwright() as p:
                 browser = await p.chromium.launch()
-                page = await browser.new_page(viewport={"width": int(png_width // 2 * scale), "height": int(png_height // 2 * scale)})
+                page = await browser.new_page(viewport={"width": int(png_width * scale), "height": int(png_height * scale)})
 
                 # Set the HTML content
                 await page.set_content(html_content)
