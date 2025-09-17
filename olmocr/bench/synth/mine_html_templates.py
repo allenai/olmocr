@@ -9,6 +9,8 @@ import re
 import subprocess
 import uuid
 import glob
+import base64
+import io
 from collections import defaultdict
 from typing import Dict, List
 
@@ -16,6 +18,7 @@ import pypdf
 from anthropic import AsyncAnthropic
 from bs4 import BeautifulSoup
 from markdownify import MarkdownConverter, SPACES
+from PIL import Image
 from playwright.async_api import async_playwright
 from syntok.segmenter import process
 from tqdm import tqdm
@@ -27,6 +30,7 @@ from olmocr.data.renderpdf import (
 )
 from olmocr.filter.filter import PdfFilter, Language
 
+from olmocr.bench.synth.figure_bounding_boxes_claude import detect_figures_with_claude
 
 # Global variables for tracking Claude API costs
 total_input_tokens = 0
@@ -307,6 +311,110 @@ def extract_code_block(initial_response):
     return None
 
 
+def extract_image_region(base64_png, x1, y1, x2, y2):
+    """
+    Extract a rectangular region from a base64-encoded PNG image and return it as base64.
+    
+    Args:
+        base64_png: Base64-encoded PNG image
+        x1, y1: Top-left coordinates of the region
+        x2, y2: Bottom-right coordinates of the region
+    
+    Returns:
+        Base64-encoded PNG of the extracted region
+    """
+    try:
+        # Decode the base64 image
+        img_data = base64.b64decode(base64_png)
+        img = Image.open(io.BytesIO(img_data))
+        
+        # Ensure coordinates are integers and in the right order
+        x1, y1, x2, y2 = int(x1), int(y1), int(x2), int(y2)
+        x1, x2 = min(x1, x2), max(x1, x2)
+        y1, y2 = min(y1, y2), max(y1, y2)
+        
+        # Clamp coordinates to image bounds
+        img_width, img_height = img.size
+        x1 = max(0, min(x1, img_width))
+        x2 = max(0, min(x2, img_width))
+        y1 = max(0, min(y1, img_height))
+        y2 = max(0, min(y2, img_height))
+        
+        # Crop the image
+        cropped = img.crop((x1, y1, x2, y2))
+        
+        # Save to bytes buffer as PNG
+        buffer = io.BytesIO()
+        cropped.save(buffer, format='PNG')
+        buffer.seek(0)
+        
+        # Encode to base64
+        return base64.b64encode(buffer.read()).decode('utf-8')
+    except Exception as e:
+        print(f"Error extracting image region: {e}")
+        return None
+
+
+def embed_image_regions_in_html(html_content, base64_png):
+    """
+    Process HTML to find <div class="image"> tags with bounding box attributes
+    and embed the extracted image regions as base64 PNGs.
+    
+    Args:
+        html_content: HTML string with image placeholder divs
+        base64_png: Base64-encoded source PNG image
+    
+    Returns:
+        Modified HTML with embedded image regions
+    """
+    try:
+        soup = BeautifulSoup(html_content, 'html.parser')
+        
+        # Find all image divs with bounding box coordinates
+        image_divs = soup.find_all('div', class_='image')
+        
+        for div in image_divs:
+            # Get bounding box coordinates
+            x1 = div.get('data-x1')
+            y1 = div.get('data-y1')
+            x2 = div.get('data-x2')
+            y2 = div.get('data-y2')
+            
+            if x1 and y1 and x2 and y2:
+                try:
+                    # Extract the image region
+                    region_base64 = extract_image_region(base64_png, x1, y1, x2, y2)
+                    
+                    if region_base64:
+                        # Create an img tag with the extracted region
+                        img_tag = soup.new_tag('img')
+                        img_tag['src'] = f'data:image/png;base64,{region_base64}'
+                        
+                        # Add alt text from data-description if available
+                        description = div.get('data-description')
+                        if description:
+                            img_tag['alt'] = description
+                        else:
+                            img_tag['alt'] = 'Extracted image'
+                        
+                        # Add style to maintain original dimensions
+                        width = int(float(x2) - float(x1))
+                        height = int(float(y2) - float(y1))
+                        img_tag['style'] = f'width: {width}px; height: {height}px; object-fit: contain;'
+                        
+                        # Add the img tag inside the div
+                        div.append(img_tag)
+                        
+                except Exception as e:
+                    print(f"Error processing image div: {e}")
+                    continue
+        
+        return str(soup)
+    except Exception as e:
+        print(f"Error embedding image regions in HTML: {e}")
+        return html_content
+
+
 async def generate_html_from_image(client, image_base64):
     """Call Claude API to generate HTML from an image using a multi-step prompting strategy."""
     global total_input_tokens, total_output_tokens
@@ -337,10 +445,19 @@ async def generate_html_from_image(client, image_base64):
             ],
         )
 
+        # Step 1a. Get the bounding boxes of any figures directly in a separate request
+        bboxes = detect_figures_with_claude(image_base64, png_width, png_height)
+
         analysis_text = ""
         for content in analysis_response.content:
             if content.type == "text":
                 analysis_text += content.text
+
+        if len(bboxes) > 0:
+            analysis_text += "\n\nAdditionally, you can find the following images and figures which have been detected in the original document, along with their descriptions and coordinates:\n"
+
+            for bbox in bboxes:
+                analysis_text += bbox.model_dump_json() + "\n"
         
         # Track token usage from first API call
         if hasattr(analysis_response, 'usage'):
@@ -364,7 +481,7 @@ async def generate_html_from_image(client, image_base64):
                             "Important requirements:\n"
                             "1. Use appropriate HTML tags for elements like headings, paragraphs, lists, tables, etc.\n"
                             "2. Use the <header> and <footer> tags to represent content at the top/bottom which would not normally be part of the main content, such as page numbers, etc.\n"
-                            "3. Use a placeholder <div> tag with class 'image' which will render as a grey box with black outline to make sure images have their original size, shape, and position on the page. Include an alt-text of the original image as a 'data-description' attribute on the tag. Include 'data-x', 'data-y', 'data-width', 'data-height' attributes which specify where the image was found in the original document.\n"
+                            "3. Use a placeholder <div> tag with class 'image' which will render as a grey box with black outline to make sure images have their original size, shape, and position on the page. Include an alt-text of the original image as a 'data-description' attribute on the tag. Include 'data-x1', 'data-y1', 'data-x2', 'data-y2' attributes which specify where the image was found in the original document.\n"
                             "4. Render any math equations and Latex inline using either \\[ \\] or \\( \\) delimeters.\n"
                             "5. CRITICAL: If the document has a multi-column layout, you MUST preserve the exact same number of columns in your HTML. Use CSS flexbox or grid to create the columns.\n"
                             "6. Focus on creating valid, accessible HTML that preserves the appearance and formatting of the original page as closely as possible.\n"
@@ -388,7 +505,14 @@ async def generate_html_from_image(client, image_base64):
             total_input_tokens += initial_response.usage.input_tokens
             total_output_tokens += initial_response.usage.output_tokens
 
-        return extract_code_block(initial_html)
+        # Extract the HTML from the code block
+        html_content = extract_code_block(initial_html)
+        
+        if html_content:
+            # Step 3: Embed extracted image regions into the HTML
+            html_content = embed_image_regions_in_html(html_content, image_base64)
+        
+        return html_content
     except Exception as e:
         print(f"Error calling Claude API: {e}")
         return None
@@ -1075,7 +1199,7 @@ async def process_pdf(pdf_info, args, client, pdf_filter=None):
 
         # Render the page as a base64 PNG (run in thread pool since it's blocking I/O)
         loop = asyncio.get_event_loop()
-        image_base64 = await loop.run_in_executor(None, render_pdf_to_base64png, local_pdf_path, page_num, 2048)
+        image_base64 = await loop.run_in_executor(None, render_pdf_to_base64png, local_pdf_path, page_num, 1024)
 
         # Generate HTML from the image
         html_content = await generate_html_from_image(client, image_base64)
