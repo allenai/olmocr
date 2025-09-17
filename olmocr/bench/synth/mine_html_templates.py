@@ -397,10 +397,8 @@ def embed_image_regions_in_html(html_content, base64_png):
                         else:
                             img_tag['alt'] = 'Extracted image'
                         
-                        # Add style to maintain original dimensions
-                        width = int(float(x2) - float(x1))
-                        height = int(float(y2) - float(y1))
-                        img_tag['style'] = f'width: {width}px; height: {height}px; object-fit: contain;'
+                        # Set the image to fill the div completely
+                        img_tag['style'] = 'width: 100%; height: 100%; object-fit: fill;'
                         
                         # Add the img tag inside the div
                         div.append(img_tag)

@@ -93,6 +93,7 @@ def detect_figures_with_claude(base64_image: str, image_width: int, image_height
     
     prompt = f"""Analyze this PDF page image and identify all figures, charts, graphs, diagrams, and images.
     For each figure found, provide precise bounding box coordinates in pixels.
+    Do NOT include tables or text boxes.
     
     The image dimensions are {image_width} x {image_height} pixels.
     
@@ -170,6 +171,10 @@ def detect_figures_with_claude(base64_image: str, image_width: int, image_height
                             y2=fig['y2'],
                             label=fig.get('label', 'Figure')
                         )
+
+                        if "table" in bbox.label.lower():
+                            continue
+
                         bboxes.append(bbox)
                     except Exception as e:
                         print(f"Error parsing bounding box: {e}")
