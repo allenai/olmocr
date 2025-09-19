@@ -231,6 +231,7 @@ if __name__ == "__main__":
         "mistral": ("olmocr.bench.runners.run_mistral", "run_mistral"),
         "docling": ("olmocr.bench.runners.run_docling", "run_docling"),
         "rolmocr": ("olmocr.bench.runners.run_rolmocr", "run_rolmocr"),
+        "dotsocr": ("olmocr.bench.runners.run_dotsocr", "run_dotsocr"),
         "transformers": ("olmocr.bench.runners.run_transformers", "run_transformers"),
         "server": ("olmocr.bench.runners.run_server", "run_server"),
     }

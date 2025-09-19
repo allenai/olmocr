@@ -93,6 +93,7 @@ bench = [
     "mistralai",
     "lxml",
     "flask",
+    "qwen-vl-utils",
 ]
 
 train = [
