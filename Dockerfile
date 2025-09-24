@@ -11,9 +11,6 @@ RUN echo "ttf-mscorefonts-installer msttcorefonts/accepted-mscorefonts-eula sele
     apt-get install -y --no-install-recommends poppler-utils fonts-crosextra-caladea fonts-crosextra-carlito gsfonts lcdf-typetools ttf-mscorefonts-installer
 
 
-# Install uv for faster pip installs
-RUN --mount=type=cache,target=/root/.cache/uv python3 -m pip install uv
-
 # Install some helper utilities for things like the benchmark
 RUN apt-get update -y && apt-get install -y --no-install-recommends \
     git \
