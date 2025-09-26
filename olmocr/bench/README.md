@@ -97,6 +97,18 @@ to run it against your own OCR tools. Your tool just needs to support Markdown o
       <td align="center">64.5 ± 1.1</td>
     </tr>
     <tr>
+      <td align="left">Dots OCR</td>
+      <td align="center">65.2</td>
+      <td align="center">69.7</td>
+      <td align="center"><strong>84.8</strong></td>
+      <td align="center">38.6</td>
+      <td align="center">79.5</td>
+      <td align="center">72.9</td>
+      <td align="center">46.2</td>
+      <td align="center">97.8</td>
+      <td align="center">69.3 ± 1.1</td>
+    </tr>
+    <tr>
       <td align="left">GPT-4o (No Anchor)</td>
       <td align="center">51.5</td>
       <td align="center">75.5</td>
