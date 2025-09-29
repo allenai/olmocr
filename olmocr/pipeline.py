@@ -636,6 +636,8 @@ async def vllm_server_task(model_name_or_path, args, semaphore, unknown_args=Non
         str(args.tensor_parallel_size),
         "--data-parallel-size",
         str(args.data_parallel_size),
+        "--enable-chunked-prefill",
+        "--limit-mm-per-prompt '{\"video\": 0}'"
     ]
 
     if args.gpu_memory_utilization is not None:
