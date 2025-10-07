@@ -145,6 +145,10 @@ async def build_page_query(local_pdf_path: str, page: int, target_longest_image_
         ],
         "max_tokens": MAX_TOKENS,
         "temperature": 0.0,
+        "extra_body": {
+            "use_beam_search": True,
+            "best_of": 5,
+        },
     }
 
 
