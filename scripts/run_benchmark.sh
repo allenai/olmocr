@@ -1,10 +1,12 @@
 #!/bin/bash
 
 # Runs an olmocr-bench run using the full pipeline (no fallback)
-#  Without model parameter (default behavior):, uses the default image from hugging face
+#  Without model parameter (default behavior): uses the default image from hugging face
 #   ./scripts/run_benchmark.sh
 #  With model parameter: for testing custom models
 #   ./scripts/run_benchmark.sh --model your-model-name
+#  With beaker image: skip Docker build and use provided Beaker image
+#   ./scripts/run_benchmark.sh --beaker-image jakep/olmocr-benchmark-0.3.3-780bc7d934
 
 set -e
 
@@ -12,6 +14,7 @@ set -e
 MODEL=""
 B200_MODE=""
 BENCH_BRANCH=""
+BEAKER_IMAGE=""
 while [[ $# -gt 0 ]]; do
     case $1 in
         --model)
@@ -26,22 +29,30 @@ while [[ $# -gt 0 ]]; do
             BENCH_BRANCH="$2"
             shift 2
             ;;
+        --beaker-image)
+            BEAKER_IMAGE="$2"
+            shift 2
+            ;;
         *)
             echo "Unknown option: $1"
-            echo "Usage: $0 [--model MODEL_NAME] [--b200] [--benchbranch BRANCH_NAME]"
+            echo "Usage: $0 [--model MODEL_NAME] [--b200] [--benchbranch BRANCH_NAME] [--beaker-image IMAGE_NAME]"
             exit 1
             ;;
     esac
 done
 
 # Check for uncommitted changes
-if ! git diff-index --quiet HEAD --; then
-    echo "Error: There are uncommitted changes in the repository."
-    echo "Please commit or stash your changes before running the benchmark."
-    echo ""
-    echo "Uncommitted changes:"
-    git status --short
-    exit 1
+if [ -n "$BEAKER_IMAGE" ]; then
+ echo "Skipping docker build"
+else
+    if ! git diff-index --quiet HEAD --; then
+        echo "Error: There are uncommitted changes in the repository."
+        echo "Please commit or stash your changes before running the benchmark."
+        echo ""
+        echo "Uncommitted changes:"
+        git status --short
+        exit 1
+    fi
 fi
 
 # Use conda environment Python if available, otherwise use system Python
@@ -65,23 +76,29 @@ echo "Git hash: $GIT_HASH"
 GIT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
 echo "Git branch: $GIT_BRANCH"
 
-# Create full image tag
-IMAGE_TAG="olmocr-benchmark-${VERSION}-${GIT_HASH}"
-echo "Building Docker image with tag: $IMAGE_TAG"
+# Check if a Beaker image was provided
+if [ -n "$BEAKER_IMAGE" ]; then
+    echo "Using provided Beaker image: $BEAKER_IMAGE"
+    IMAGE_TAG="$BEAKER_IMAGE"
+else
+    # Create full image tag
+    IMAGE_TAG="olmocr-benchmark-${VERSION}-${GIT_HASH}"
+    echo "Building Docker image with tag: $IMAGE_TAG"
 
-# Build the Docker image
-echo "Building Docker image..."
-docker build --platform linux/amd64 -f ./Dockerfile -t $IMAGE_TAG .
+    # Build the Docker image
+    echo "Building Docker image..."
+    docker build --platform linux/amd64 -f ./Dockerfile -t $IMAGE_TAG .
+
+    # Push image to beaker
+    echo "Trying to push image to Beaker..."
+    if ! beaker image create --workspace ai2/oe-data-pdf --name $IMAGE_TAG $IMAGE_TAG 2>/dev/null; then
+        echo "Warning: Beaker image with tag $IMAGE_TAG already exists. Using existing image."
+    fi
+fi
 
 # Get Beaker username
 BEAKER_USER=$(beaker account whoami --format json | jq -r '.[0].name')
 echo "Beaker user: $BEAKER_USER"
-
-# Push image to beaker
-echo "Trying to push image to Beaker..."
-if ! beaker image create --workspace ai2/oe-data-pdf --name $IMAGE_TAG $IMAGE_TAG 2>/dev/null; then
-    echo "Warning: Beaker image with tag $IMAGE_TAG already exists. Using existing image."
-fi
 
 # Create Python script to run beaker experiment
 cat << 'EOF' > /tmp/run_benchmark_experiment.py
@@ -153,9 +170,15 @@ commands.extend([
 ])
 
 # Build task spec with optional env vars
+# If image_tag contains '/', it's already a full beaker image reference
+if '/' in image_tag:
+    image_ref = image_tag
+else:
+    image_ref = f"{beaker_user}/{image_tag}"
+
 task_spec_args = {
     "name": "olmocr-benchmark",
-    "image": ImageSource(beaker=f"{beaker_user}/{image_tag}"),
+    "image": ImageSource(beaker=image_ref),
     "command": [
         "bash", "-c",
         " && ".join(commands)
@@ -205,7 +228,7 @@ perf_commands.append(perf_pipeline_cmd)
 # Build performance task spec
 perf_task_spec_args = {
     "name": "olmocr-performance",
-    "image": ImageSource(beaker=f"{beaker_user}/{image_tag}"),
+    "image": ImageSource(beaker=image_ref),
     "command": [
         "bash", "-c",
         " && ".join(perf_commands)

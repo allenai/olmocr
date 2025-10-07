@@ -92,6 +92,13 @@ class LatexBracketNormalizerConfig(PipelineStepConfig):
 
 
 @dataclass
+class ReformatLatexBoldItalicConfig(PipelineStepConfig):
+    """Configuration for ReformatLatexBoldItalic step."""
+
+    name: str = "ReformatLatexBoldItalic"
+
+
+@dataclass
 class TokenizerStepConfig(PipelineStepConfig):
     """Configuration for Tokenizer step."""
 
@@ -114,6 +121,13 @@ class FilterOutRotatedDocumentsConfig(PipelineStepConfig):
     """Configuration for FilterOutRotatedDocuments step."""
 
     name: str = "FilterOutRotatedDocuments"
+
+
+@dataclass
+class DatasetTextRuleFilterConfig(PipelineStepConfig):
+    """Configuration for DatasetTextRuleFilter step."""
+
+    name: str = "DatasetTextRuleFilter"
 
 
 @dataclass
@@ -362,6 +376,7 @@ class Config:
         from olmocr.prompts.prompts import PageResponse
         from olmocr.train.dataloader import (
             AugraphyBasicAugmentations,
+            DatasetTextRuleFilter,
             FilterOutRotatedDocuments,
             FinetuningPrompt,
             FrontMatterOutputFormat,
@@ -373,6 +388,7 @@ class Config:
             NewYamlFinetuningPromptWithNoAnchoring,
             PDFRenderer,
             RandomTokenFlipper,
+            ReformatLatexBoldItalic,
             RotationAugmentation,
             StaticLengthDocumentAnchoring,
             Tokenizer,
@@ -457,11 +473,17 @@ class Config:
             elif step_name == "FilterOutRotatedDocuments":
                 steps.append(FilterOutRotatedDocuments())
 
+            elif step_name == "DatasetTextRuleFilter":
+                steps.append(DatasetTextRuleFilter())
+
             elif step_name == "RotationAugmentation":
                 steps.append(RotationAugmentation(probability=step_config.get("probability", 0.5)))
 
             elif step_name == "AugraphyBasicAugmentations":
                 steps.append(AugraphyBasicAugmentations(probability=step_config.get("probability", 0.5)))
+
+            elif step_name == "ReformatLatexBoldItalic":
+                steps.append(ReformatLatexBoldItalic())
 
             else:
                 raise ValueError(f"Unknown pipeline step: {step_name}")

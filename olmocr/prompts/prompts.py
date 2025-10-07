@@ -17,6 +17,52 @@ def build_openai_silver_data_prompt(base_text: str) -> str:
     )
 
 
+def build_openai_silver_data_prompt_v2(base_text: str) -> str:
+    return (
+        f"Below is the image of one page of a PDF document, as well as some raw textual content that was previously extracted for it that includes position information for each image and block of text (The origin [0x0] of the coordinates is in the lower left corner of the image). "
+        f"Just return the plain text representation of this document as if you were reading it naturally.\n"
+        f"Turn equations into a LaTeX representation, make sure to use \\( and \\) as a delimiter for inline math, and \\[ and \\] for block math.\n"
+        f"Convert tables into HTML format. Remove the headers and footers, but keep references and footnotes.\n"
+        f"Read any natural handwriting.\n"
+        f"If there are any figures or charts, label them with the following markdown syntax ![Alt text describing the contents of the figure](page_startx_starty_width_height.png)"
+        f"This is likely one page out of several in the document, so be sure to preserve any sentences that come from the previous page, or continue onto the next page, exactly as they are.\n"
+        f"If there is no text at all that you think you should read, you can output null.\n"
+        f"Do not hallucinate.\n"
+        f"RAW_TEXT_START\n{base_text}\nRAW_TEXT_END"
+    )
+
+
+def build_openai_silver_data_prompt_v2_simple(page_width: int, page_height: int) -> str:
+    return (
+        f"Attached is the image of one page of a PDF document."
+        f"Just return the plain text representation of this document as if you were reading it naturally.\n"
+        f"Turn equations and math symbols into a LaTeX representation, make sure to use \\( and \\) as a delimiter for inline math, and \\[ and \\] for block math. Always prefer LaTeX syntax instead of using unicode math symbols.\n"
+        f"Convert tables into HTML format. Remove the headers and footers, but keep references and footnotes.\n"
+        f"Read any natural handwriting.\n"
+        f"If there are any figures or charts, label them with the following markdown syntax ![Alt text describing the contents of the figure](page_startx_starty_width_height.png)"
+        f"This is likely one page out of several in the document, so be sure to preserve any sentences that come from the previous page, or continue onto the next page, exactly as they are.\n"
+        f"If there is no text at all that you think you should read, you can output null.\n"
+        f"Do not hallucinate.\n"
+        f"Page width: {page_width}, Page height: {page_height}"
+    )
+
+
+def build_openai_silver_data_prompt_v3_simple(page_width: int, page_height: int) -> str:
+    return (
+        f"Attached is the image of one page of a PDF document."
+        f"Just return the plain text representation of this document as if you were reading it naturally.\n"
+        f"Turn equations and math symbols into a LaTeX representation, make sure to use \\( and \\) as a delimiter for inline math, and \\[ and \\] for block math. Do NOT use ascii or unicode math symbols such as ∈ ∉ ⊂ ⊃ ⊆ ⊇ ∅ ∪ ∩ ∀ ∃ ¬, just use LaTeX syntax, ex  \\( \\in \\) \\( \\notin \\) etc. If you were going to surround a math expression in $ symbols, surround it with \\( \\) instead.\n"
+        f"Convert tables into HTML format. Keep the syntax simple, but use <th> for header rows, and use rowspan and colspans appropriately. Don't use <br> inside of table cells, just split that into new rows as needed. Do NOT use LaTeX or Markdown table syntax.\n"
+        f"Remove the headers and footers, but keep references and footnotes.\n"
+        f"Read any natural handwriting.\n"
+        f"If there are any figures or charts, label them with the following markdown syntax ![Alt text describing the contents of the figure](page_startx_starty_width_height.png)"
+        f"This is likely one page out of several in the document, so be sure to preserve any sentences that come from the previous page, or continue onto the next page, exactly as they are.\n"
+        f"If there is no text at all that you think you should read, you can output null.\n"
+        f"Do not hallucinate.\n"
+        f"Page width: {page_width}, Page height: {page_height}"
+    )
+
+
 @dataclass(frozen=True)
 class PageResponse:
     primary_language: Optional[str]
@@ -111,6 +157,15 @@ def build_no_anchoring_yaml_prompt() -> str:
     return (
         "Attached is one page of a document that you must process. "
         "Just return the plain text representation of this document as if you were reading it naturally. Convert equations to LateX and tables to markdown.\n"
+        "Return your output as markdown, with a front matter section on top specifying values for the primary_language, is_rotation_valid, rotation_correction, is_table, and is_diagram parameters."
+    )
+
+
+def build_no_anchoring_v4_yaml_prompt() -> str:
+    return (
+        "Attached is one page of a document that you must process. "
+        "Just return the plain text representation of this document as if you were reading it naturally. Convert equations to LateX and tables to HTML.\n"
+        "If there are any figures or charts, label them with the following markdown syntax ![Alt text describing the contents of the figure](page_startx_starty_width_height.png)\n"
         "Return your output as markdown, with a front matter section on top specifying values for the primary_language, is_rotation_valid, rotation_correction, is_table, and is_diagram parameters."
     )
 

@@ -56,7 +56,7 @@ def download_and_extract_source(paper_id, data_dir):
 
 
 def download_pdf(paper_id, data_dir):
-    pdf_url = f"https://arxiv.org/pdf/{paper_id}.pdf"
+    pdf_url = f"https://export.arxiv.org/pdf/{paper_id}.pdf"
     print(f"Downloading PDF for {paper_id} from {pdf_url}...")
     response = requests.get(pdf_url)
     if response.status_code != 200:
@@ -75,6 +75,7 @@ def main():
         "--url", type=str, default="https://arxiv.org/list/math/recent?skip=0&show=2000", help="URL of the arXiv list page to scrape (default: %(default)s)"
     )
     parser.add_argument("--data_dir", type=str, default="math_data/pdfs", help="Directory to save downloaded files (default: %(default)s)")
+    parser.add_argument("--pdf_only", action="store_true", help="Skip LaTeX verification and only download PDFs")
     args = parser.parse_args()
 
     if not os.path.exists(args.data_dir):
@@ -91,21 +92,28 @@ def main():
     paper_ids = pattern.findall(response.text)
     print(f"Found {len(paper_ids)} papers.")
 
-    # For each paper, only keep the files if both the tex extraction and pdf download succeed.
+    # For each paper, download based on the mode
     for paper_id in tqdm(paper_ids):
-        tex_success = download_and_extract_source(paper_id, args.data_dir)
-        if not tex_success:
-            print(f"Skipping PDF download for {paper_id} because tex extraction failed.")
-            continue
+        if args.pdf_only:
+            # Only download PDFs, skip LaTeX verification
+            pdf_success = download_pdf(paper_id, args.data_dir)
+            if not pdf_success:
+                print(f"Failed to download PDF for {paper_id}")
+        else:
+            # Original behavior: only keep files if both tex extraction and pdf download succeed
+            tex_success = download_and_extract_source(paper_id, args.data_dir)
+            if not tex_success:
+                print(f"Skipping PDF download for {paper_id} because tex extraction failed.")
+                continue
 
-        pdf_success = download_pdf(paper_id, args.data_dir)
-        if not pdf_success:
-            # Remove the tex file if the PDF download fails.
-            tex_path = os.path.join(args.data_dir, f"{paper_id}.tex")
-            if os.path.exists(tex_path):
-                os.remove(tex_path)
-                print(f"Removed tex file for {paper_id} because PDF download failed.")
-        time.sleep(1)
+            pdf_success = download_pdf(paper_id, args.data_dir)
+            if not pdf_success:
+                # Remove the tex file if the PDF download fails.
+                tex_path = os.path.join(args.data_dir, f"{paper_id}.tex")
+                if os.path.exists(tex_path):
+                    os.remove(tex_path)
+                    print(f"Removed tex file for {paper_id} because PDF download failed.")
+        time.sleep(3)
 
 
 if __name__ == "__main__":

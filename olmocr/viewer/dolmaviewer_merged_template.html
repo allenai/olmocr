@@ -2,7 +2,7 @@
 <html>
 <head>
     <meta charset="UTF-8">
-    <title>{{ id }}</title>
+    <title>Merged Documents</title>
     
     <!-- KaTeX CSS -->
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css" integrity="sha384-n8MVd4RsNIU0tAv4ct0nTaAbDJwPJzDEaqSD1odI+WdtXRGWt2kTvGFasHpSy3SV" crossorigin="anonymous">
@@ -17,7 +17,7 @@
             display: flex;
             justify-content: center;
         }
-        .document {
+        .container {
             background-color: #fff;
             padding: 40px;
             margin: 20px;
@@ -27,18 +27,38 @@
             position: relative;
         }
         
-        /* Toggle button styles */
-        .toggle-container {
+        /* Navigation */
+        .nav-container {
             position: sticky;
-            top: 20px;
-            float: right;
-            z-index: 1000;
+            top: 0;
             background: white;
-            padding: 10px;
-            border-radius: 5px;
-            box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
+            z-index: 1001;
+            padding: 15px 0;
+            margin-bottom: 20px;
+            border-bottom: 2px solid #dee2e6;
         }
         
+        .nav-controls {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 20px;
+        }
+        
+        .nav-select {
+            flex: 1;
+            max-width: 400px;
+        }
+        
+        .nav-select select {
+            width: 100%;
+            padding: 8px 12px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            font-size: 14px;
+        }
+        
+        /* Toggle button styles */
         .toggle-button {
             display: inline-flex;
             align-items: center;
@@ -63,6 +83,31 @@
         
         .toggle-button.raw-mode:hover {
             background: #0b7dda;
+        }
+        
+        /* Document separator */
+        .document-separator {
+            margin: 40px 0;
+            padding: 20px 0;
+            border-top: 3px solid #dee2e6;
+            position: relative;
+        }
+        
+        .document-separator::before {
+            content: attr(data-doc-number);
+            position: absolute;
+            top: -15px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: white;
+            padding: 0 15px;
+            color: #6c757d;
+            font-weight: bold;
+            font-size: 14px;
+        }
+        
+        .document {
+            margin-bottom: 40px;
         }
         
         .page-section {
@@ -241,6 +286,14 @@
             padding-top: 10px;
             border-top: 1px solid #dee2e6;
         }
+        
+        /* Document count */
+        .doc-count {
+            text-align: center;
+            color: #6c757d;
+            font-size: 14px;
+            margin: 10px 0;
+        }
 
     </style>
     
@@ -251,87 +304,109 @@
     <script src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js" integrity="sha384-XjKyOOlGwcjNTAIQHIpgOno0Hl1YQqzUOEleOLALmuqehneUG+vnGctmUb0ZY0l8" crossorigin="anonymous"></script>
 </head>
 <body>
-    <div class="document">
-        <div class="toggle-container">
-            <button class="toggle-button" id="toggleView">
-                <span id="toggleText">📝 Markdown View</span>
-            </button>
-        </div>
-        
-        <!-- Metadata Section -->
-        <div class="metadata-container">
-            <div class="metadata-grid">
-                {% if metadata.source %}
-                <div class="metadata-item">
-                    <span class="metadata-label">Source:</span>
-                    <span class="metadata-value">{{ metadata.source }}</span>
+    <div class="container">
+        <!-- Navigation controls -->
+        <div class="nav-container">
+            <div class="nav-controls">
+                <div class="nav-select">
+                    <select id="documentSelect">
+                        <option value="">Jump to document...</option>
+                        {% for doc in documents %}
+                        <option value="doc-{{ loop.index }}">Document {{ loop.index }}: {{ doc.id[:50] }}...</option>
+                        {% endfor %}
+                    </select>
                 </div>
-                {% endif %}
-                {% if metadata.olmocr_version %}
-                <div class="metadata-item">
-                    <span class="metadata-label">OlmOCR:</span>
-                    <span class="metadata-value">v{{ metadata.olmocr_version }}</span>
-                </div>
-                {% endif %}
-                {% if metadata.created %}
-                <div class="metadata-item">
-                    <span class="metadata-label">Created:</span>
-                    <span class="metadata-value">{{ metadata.created }}</span>
-                </div>
-                {% endif %}
-                {% if metadata.pdf_pages %}
-                <div class="metadata-item">
-                    <span class="metadata-label">Pages:</span>
-                    <span class="metadata-value">{{ metadata.pdf_pages }}</span>
-                </div>
-                {% endif %}
-                {% if metadata.tokens_in %}
-                <div class="metadata-item">
-                    <span class="metadata-label">Tokens In:</span>
-                    <span class="metadata-value">{{ metadata.tokens_in }}</span>
-                </div>
-                {% endif %}
-                {% if metadata.tokens_out %}
-                <div class="metadata-item">
-                    <span class="metadata-label">Tokens Out:</span>
-                    <span class="metadata-value">{{ metadata.tokens_out }}</span>
-                </div>
-                {% endif %}
-                {% if attributes.primary_language %}
-                <div class="metadata-item">
-                    <span class="metadata-label">Language:</span>
-                    <span class="metadata-value">{{ attributes.primary_language[0] }}</span>
-                </div>
-                {% endif %}
-                {% if attributes.rotation_correction %}
-                <div class="metadata-item">
-                    <span class="metadata-label">Rotation:</span>
-                    <span class="metadata-value">{{ attributes.rotation_correction[0] }}°</span>
-                </div>
-                {% endif %}
-                {% if metadata.source_file %}
-                <div class="metadata-item metadata-source-file">
-                    <span class="metadata-label">File:</span>
-                    <span class="metadata-value">{{ metadata.source_file }}</span>
-                </div>
-                {% endif %}
+                <button class="toggle-button" id="toggleView">
+                    <span id="toggleText">📝 Markdown View</span>
+                </button>
+            </div>
+            <div class="doc-count">
+                Total documents: {{ documents|length }}
             </div>
         </div>
         
-        {% for page in pages %}
-        <div class="page-section" id="page-{{ page.page_num }}">
-            <div class="text">
-                <div class="text-content markdown" data-raw-text="{{ page.text }}">
-                    <!-- Content will be rendered by JavaScript -->
+        {% for doc in documents %}
+        {% if loop.index > 1 %}
+        <div class="document-separator" data-doc-number="Document {{ loop.index }}"></div>
+        {% endif %}
+        
+        <div class="document" id="doc-{{ loop.index }}">
+            <!-- Metadata Section -->
+            <div class="metadata-container">
+                <div class="metadata-grid">
+                    {% if doc.metadata.source %}
+                    <div class="metadata-item">
+                        <span class="metadata-label">Source:</span>
+                        <span class="metadata-value">{{ doc.metadata.source }}</span>
+                    </div>
+                    {% endif %}
+                    {% if doc.metadata.olmocr_version %}
+                    <div class="metadata-item">
+                        <span class="metadata-label">OlmOCR:</span>
+                        <span class="metadata-value">v{{ doc.metadata.olmocr_version }}</span>
+                    </div>
+                    {% endif %}
+                    {% if doc.metadata.created %}
+                    <div class="metadata-item">
+                        <span class="metadata-label">Created:</span>
+                        <span class="metadata-value">{{ doc.metadata.created }}</span>
+                    </div>
+                    {% endif %}
+                    {% if doc.metadata.pdf_pages %}
+                    <div class="metadata-item">
+                        <span class="metadata-label">Pages:</span>
+                        <span class="metadata-value">{{ doc.metadata.pdf_pages }}</span>
+                    </div>
+                    {% endif %}
+                    {% if doc.metadata.tokens_in %}
+                    <div class="metadata-item">
+                        <span class="metadata-label">Tokens In:</span>
+                        <span class="metadata-value">{{ doc.metadata.tokens_in }}</span>
+                    </div>
+                    {% endif %}
+                    {% if doc.metadata.tokens_out %}
+                    <div class="metadata-item">
+                        <span class="metadata-label">Tokens Out:</span>
+                        <span class="metadata-value">{{ doc.metadata.tokens_out }}</span>
+                    </div>
+                    {% endif %}
+                    {% if doc.attributes.primary_language %}
+                    <div class="metadata-item">
+                        <span class="metadata-label">Language:</span>
+                        <span class="metadata-value">{{ doc.attributes.primary_language[0] }}</span>
+                    </div>
+                    {% endif %}
+                    {% if doc.attributes.rotation_correction %}
+                    <div class="metadata-item">
+                        <span class="metadata-label">Rotation:</span>
+                        <span class="metadata-value">{{ doc.attributes.rotation_correction[0] }}°</span>
+                    </div>
+                    {% endif %}
+                    {% if doc.metadata.source_file %}
+                    <div class="metadata-item metadata-source-file">
+                        <span class="metadata-label">File:</span>
+                        <span class="metadata-value">{{ doc.metadata.source_file }}</span>
+                    </div>
+                    {% endif %}
                 </div>
             </div>
-            {% if page.image %}
-            <div class="image">
-                <a href="{{ s3_link }}#page={{ page.page_num  }}" target="_blank">
-                <img src="data:image/webp;base64,{{ page.image }}" alt="Page {{ page.page_num }} Image">
-                </a>
+            
+            {% for page in doc.pages %}
+            <div class="page-section" id="doc-{{ loop.index0 }}-page-{{ page.page_num }}">
+                <div class="text">
+                    <div class="text-content markdown" data-raw-text="{{ page.text }}">
+                        <!-- Content will be rendered by JavaScript -->
+                    </div>
+                </div>
+                {% if page.image %}
+                <div class="image">
+                    <a href="{{ doc.s3_link }}#page={{ page.page_num }}" target="_blank">
+                    <img src="data:image/webp;base64,{{ page.image }}" alt="Page {{ page.page_num }} Image">
+                    </a>
+                </div>
+                {% endif %}
             </div>
-            {% endif %}
+            {% endfor %}
         </div>
         {% endfor %}
     </div>
@@ -405,6 +480,20 @@
             }
             
             renderMarkdown();
+        });
+        
+        // Document navigation
+        document.getElementById('documentSelect').addEventListener('change', function() {
+            if (this.value) {
+                const element = document.getElementById(this.value);
+                if (element) {
+                    element.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                    // Reset the select after navigation
+                    setTimeout(() => {
+                        this.value = '';
+                    }, 100);
+                }
+            }
         });
         
         // Initial render when page loads

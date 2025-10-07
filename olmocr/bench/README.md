@@ -56,7 +56,7 @@ to run it against your own OCR tools. Your tool just needs to support Markdown o
       <td align="center">27.8</td>
       <td align="center">84.9</td>
       <td align="center">72.9</td>
-      <td align="center"><strong>84.6</strong></td>
+      <td align="center">84.6</td>
       <td align="center">99.1</td>
       <td align="center">70.1 ± 1.1</td>
     </tr>
@@ -88,7 +88,7 @@ to run it against your own OCR tools. Your tool just needs to support Markdown o
       <td align="left">Nanonets OCR</td>
       <td align="center">67.0</td>
       <td align="center">68.6</td>
-      <td align="center"><strong>77.7</strong></td>
+      <td align="center">77.7</td>
       <td align="center">39.5</td>
       <td align="center">40.7</td>
       <td align="center">69.9</td>
@@ -194,20 +194,20 @@ to run it against your own OCR tools. Your tool just needs to support Markdown o
     </tr>
     <tr>
       <td align="left">olmOCR v0.2.0</td>
-      <td align="center"><strong>78.8</strong></td>
+      <td align="center">78.8</td>
       <td align="center">77.5</td>
       <td align="center">71.9</td>
-      <td align="center"><strong>45.4</strong></td>
+      <td align="center">45.4</td>
       <td align="center">94.2</td>
-      <td align="center"><strong>78.6</strong></td>
+      <td align="center">78.6</td>
       <td align="center">81.4</td>
-      <td align="center"><strong>99.8</strong></td>
-      <td align="center"><strong>78.5 ± 1.1</strong></td>
+      <td align="center">99.8</td>
+      <td align="center">78.5 ± 1.1</td>
     </tr>
     <tr>
       <td align="left">olmOCR v0.3.0</td>
       <td align="center">78.6</td>
-      <td align="center"><strong>79.9</strong></td>
+      <td align="center">79.9</td>
       <td align="center">72.9</td>
       <td align="center">43.9</td>
       <td align="center">95.1</td>
@@ -215,10 +215,21 @@ to run it against your own OCR tools. Your tool just needs to support Markdown o
       <td align="center">81.2</td>
       <td align="center">98.9</td>
       <td align="center">78.5 ± 1.1</td>
-    </tr>    
+    </tr>   
+    <tr>
+      <td align="left">olmOCR pipeline v0.4.0</td>
+      <td align="center">83.0</td>
+      <td align="center">82.3</td>
+      <td align="center">84.9</td>
+      <td align="center">47.7</td>
+      <td align="center">96.1</td>
+      <td align="center">83.7</td>
+      <td align="center">81.9</td>
+      <td align="center">99.7</td>
+      <td align="center">82.4 ± 1.1</td>
+    </tr>  
   </tbody>
 </table>
-
 
 <sup><sub>There was a small drop in scores from olmOCR v0.1.68 (77.4), which is due to two factors. One, is that we have adjusted our benchmark code to not include
 any "fallback" mechanism when measuring benchmark scores (though it still exists when you run olmocr.pipeline). Second, there is a small drop in scores as we have updated

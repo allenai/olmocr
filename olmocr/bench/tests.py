@@ -633,6 +633,8 @@ class TableTest(BasePDFTest):
     top_heading: str = ""
     left_heading: str = ""
 
+    ignore_markdown_tables: bool = False
+
     def __post_init__(self):
         super().__post_init__()
         if self.type != TestType.TABLE.value:
@@ -670,8 +672,9 @@ class TableTest(BasePDFTest):
         threshold = max(0.5, threshold)
 
         # Parse tables based on content_type
-        md_tables = parse_markdown_tables(content)
-        tables_to_check.extend(md_tables)
+        if not self.ignore_markdown_tables:
+            md_tables = parse_markdown_tables(content)
+            tables_to_check.extend(md_tables)
 
         html_tables = parse_html_tables(content)
         tables_to_check.extend(html_tables)
@@ -868,6 +871,7 @@ class BaselineTest(BasePDFTest):
     """
 
     max_length: Optional[int] = None  # Used to implement blank page checks
+    max_length_skips_image_alt_tags: bool = False
 
     max_repeats: int = 30
     check_disallowed_characters: bool = True
@@ -877,6 +881,11 @@ class BaselineTest(BasePDFTest):
 
         # If this a blank page check, then it short circuits the rest of the checks
         if self.max_length is not None:
+            if self.max_length_skips_image_alt_tags:
+                # Remove markdown image tags like ![alt text](image.png) from the text length count
+                content_for_length_check = re.sub(r"!\[.*?\]\(.*?\)", "", content)
+                base_content_len = len("".join(c for c in content_for_length_check if c.isalnum()).strip())
+
             if base_content_len > self.max_length:
                 return False, f"{base_content_len} characters were output for a page we expected to be blank"
             else:
@@ -920,6 +929,8 @@ class BaselineTest(BasePDFTest):
 class MathTest(BasePDFTest):
     math: str
 
+    ignore_dollar_delimited: bool = False
+
     def __post_init__(self):
         super().__post_init__()
         if self.type != TestType.MATH.value:
@@ -935,11 +946,17 @@ class MathTest(BasePDFTest):
     def run(self, content: str) -> Tuple[bool, str]:
         # Store both the search pattern and the full pattern to replace
         patterns = [
-            (r"\$\$(.+?)\$\$", r"\$\$(.+?)\$\$"),  # $$...$$
             (r"\\\((.+?)\\\)", r"\\\((.+?)\\\)"),  # \(...\)
             (r"\\\[(.+?)\\\]", r"\\\[(.+?)\\\]"),  # \[...\]
-            (r"\$(.+?)\$", r"\$(.+?)\$"),  # $...$
         ]
+
+        if not self.ignore_dollar_delimited:
+            patterns.extend(
+                [
+                    (r"\$\$(.+?)\$\$", r"\$\$(.+?)\$\$"),  # $$...$$
+                    (r"\$(.+?)\$", r"\$(.+?)\$"),  # $...$])
+                ]
+            )
 
         equations = []
         modified_content = content

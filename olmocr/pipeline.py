@@ -38,7 +38,7 @@ from olmocr.data.renderpdf import render_pdf_to_base64png
 from olmocr.filter.filter import Language, PdfFilter
 from olmocr.image_utils import convert_image_to_pdf_bytes, is_jpeg, is_png
 from olmocr.metrics import MetricsKeeper, WorkerTracker
-from olmocr.prompts import PageResponse, build_no_anchoring_yaml_prompt
+from olmocr.prompts import PageResponse, build_no_anchoring_v4_yaml_prompt
 from olmocr.prompts.anchor import get_anchor_text
 from olmocr.s3_utils import (
     download_directory,
@@ -106,7 +106,7 @@ class PageResult:
 
 
 async def build_page_query(local_pdf_path: str, page: int, target_longest_image_dim: int, image_rotation: int = 0, model_name: str = "olmocr") -> dict:
-    MAX_TOKENS = 4500
+    MAX_TOKENS = 8000
     assert image_rotation in [0, 90, 180, 270], "Invalid image rotation provided in build_page_query"
 
     # Allow the page rendering to process in the background, but limit the number of workers otherwise you can overload the system
@@ -138,7 +138,7 @@ async def build_page_query(local_pdf_path: str, page: int, target_longest_image_
             {
                 "role": "user",
                 "content": [
-                    {"type": "text", "text": build_no_anchoring_yaml_prompt()},
+                    {"type": "text", "text": build_no_anchoring_v4_yaml_prompt()},
                     {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{image_base64}"}},
                 ],
             }
@@ -724,7 +724,7 @@ async def vllm_server_task(model_name_or_path, args, semaphore, unknown_args=Non
                 # Check if we should release the semaphore
                 should_release = (
                     server_printed_ready_message
-                    and last_queue_req <= int(peak_running_req * 0.1)
+                    and last_queue_req <= int(peak_running_req * 0.2)
                     and time.time() - last_semaphore_release > 30
                     and semaphore.locked()
                     and (last_running_req == 0 or running_reqs_decreased)
@@ -1098,8 +1098,8 @@ async def main():
     )
     parser.add_argument(
         "--model",
-        help="Path where the model is located, allenai/olmOCR-7B-0825-FP8 is the default, can be local, s3, or hugging face.",
-        default="allenai/olmOCR-7B-0825-FP8",
+        help="Path where the model is located, allenai/olmOCR-7B-1025-FP8 is the default, can be local, s3, or hugging face.",
+        default="allenai/olmOCR-7B-1025-FP8",
     )
 
     # More detailed config options, usually you shouldn't have to change these

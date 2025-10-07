@@ -8,12 +8,18 @@ from olmocr.bench.prompts import (
     build_basic_prompt,
     build_openai_silver_data_prompt_no_document_anchoring,
 )
-from olmocr.data.renderpdf import render_pdf_to_base64png
+from olmocr.data.renderpdf import (
+    get_png_dimensions_from_base64,
+    render_pdf_to_base64png,
+)
 from olmocr.prompts.anchor import get_anchor_text
 from olmocr.prompts.prompts import (
     PageResponse,
     build_finetuning_prompt,
     build_openai_silver_data_prompt,
+    build_openai_silver_data_prompt_v2,
+    build_openai_silver_data_prompt_v2_simple,
+    build_openai_silver_data_prompt_v3_simple,
     openai_response_format_schema,
 )
 
@@ -24,7 +30,7 @@ def run_chatgpt(
     model: str = "gpt-4o-2024-08-06",
     temperature: float = 0.1,
     target_longest_image_dim: int = 2048,
-    prompt_template: Literal["full", "full_no_document_anchoring", "basic", "finetune"] = "finetune",
+    prompt_template: Literal["full", "full_no_document_anchoring", "basic", "finetune", "fullv2", "fullv2simple", "fullv3simple"] = "finetune",
     response_template: Literal["plain", "json"] = "json",
 ) -> str:
     """
@@ -55,6 +61,14 @@ def run_chatgpt(
         prompt = build_finetuning_prompt(anchor_text)
     elif prompt_template == "basic":
         prompt = build_basic_prompt()
+    elif prompt_template == "fullv2":
+        prompt = build_openai_silver_data_prompt_v2(anchor_text)
+    elif prompt_template == "fullv2simple":
+        width, height = get_png_dimensions_from_base64(image_base64)
+        prompt = build_openai_silver_data_prompt_v2_simple(width, height)
+    elif prompt_template == "fullv3simple":
+        width, height = get_png_dimensions_from_base64(image_base64)
+        prompt = build_openai_silver_data_prompt_v3_simple(width, height)
     else:
         raise ValueError("Unknown prompt template")
 
@@ -70,8 +84,10 @@ def run_chatgpt(
             }
         ],
         temperature=temperature,
-        max_tokens=3000,
+        max_completion_tokens=20000,
+        # reasoning_effort="high",
         response_format=openai_response_format_schema() if response_template == "json" else None,
+        safety_identifier="olmocr-bench-runner",
     )
 
     raw_response = response.choices[0].message.content
