@@ -102,7 +102,7 @@ b = Beaker.from_env(default_workspace="ai2/olmocr")
 dataset_name = dataset.rstrip('/').split('/')[-1]
 commands = [
     "pip install .[train]",
-    "pip install transformers==4.52.4",
+    "pip install transformers==4.57.0",
     "pip install flash-attn==2.8.0.post2 --no-build-isolation",
     "pip install s5cmd",
     f"s5cmd sync {dataset}/processed_* /data/{dataset_name}/",
