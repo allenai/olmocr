@@ -20,6 +20,7 @@ from transformers import (
     AutoProcessor,
     Qwen2_5_VLForConditionalGeneration,
     Qwen2VLForConditionalGeneration,
+    Qwen3VLMoeForConditionalGeneration,
     get_scheduler,
 )
 
@@ -273,12 +274,14 @@ def main():
     logger.info(f"Loading model: {config.model.name}")
     if "qwen2.5-vl" in config.model.name.lower():
         model_class = Qwen2_5_VLForConditionalGeneration
-        model = model_class.from_pretrained(config.model.name, **model_init_kwargs)
     elif "qwen2-vl" in config.model.name.lower():
         model_class = Qwen2VLForConditionalGeneration
-        model = model_class.from_pretrained(config.model.name, **model_init_kwargs)
+    elif "qwen3-vl" in config.mode.name.lower():
+        model_class = Qwen3VLMoeForConditionalGeneration
     else:
         raise NotImplementedError()
+
+    model = model_class.from_pretrained(config.model.name, **model_init_kwargs)
 
     # Enable gradient checkpointing if configured
     if config.training.gradient_checkpointing:
