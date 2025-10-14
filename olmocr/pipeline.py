@@ -638,6 +638,8 @@ async def vllm_server_task(model_name_or_path, args, semaphore, unknown_args=Non
         str(args.data_parallel_size),
         "--limit-mm-per-prompt",
         '{"video": 0}',  # Disabling video encoder saves RAM that you can put towards the KV cache, thanks @charitarthchugh
+        "--speculative-config",
+        '{"method": "ngram","num_speculative_tokens": 8,"prompt_lookup_max": 64}'
     ]
 
     if args.gpu_memory_utilization is not None:
