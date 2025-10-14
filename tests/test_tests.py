@@ -349,20 +349,23 @@ class TestTableTest(unittest.TestCase):
         _test = TableTest(pdf="test.pdf", page=1, id="test_id", type=TestType.TABLE.value, cell="Cell A2")
         tables = parse_markdown_tables(self.markdown_table)
         self.assertEqual(len(tables), 1)
-        self.assertEqual(tables[0].data.shape, (3, 3))  # 3 rows, 3 columns
-        self.assertEqual(tables[0].data[0, 0], "Header 1")
-        self.assertEqual(tables[0].data[1, 1], "Cell A2")
-        self.assertEqual(tables[0].data[2, 2], "Cell B3")
+        table = tables[0]
+        self.assertEqual(table.cell_text[(0, 0)], "Header 1")
+        self.assertEqual(table.cell_text[(1, 1)], "Cell A2")
+        self.assertEqual(table.cell_text[(2, 2)], "Cell B3")
+        self.assertIn((0, 0), table.heading_cells)
+        self.assertIn((1, 0), table.heading_cells)
 
     def test_parse_html_tables(self):
         """Test HTML table parsing"""
         _test = TableTest(pdf="test.pdf", page=1, id="test_id", type=TestType.TABLE.value, cell="Cell A2")
         tables = parse_html_tables(self.html_table)
         self.assertEqual(len(tables), 1)
-        self.assertEqual(tables[0].data.shape, (3, 3))  # 3 rows, 3 columns
-        self.assertEqual(tables[0].data[0, 0], "Header 1")
-        self.assertEqual(tables[0].data[1, 1], "Cell A2")
-        self.assertEqual(tables[0].data[2, 2], "Cell B3")
+        table = tables[0]
+        self.assertEqual(table.cell_text[(0, 0)], "Header 1")
+        self.assertEqual(table.cell_text[(1, 1)], "Cell A2")
+        self.assertEqual(table.cell_text[(2, 2)], "Cell B3")
+        self.assertIn((0, 0), table.heading_cells)
 
     def test_match_cell(self):
         """Test finding a cell in a table"""
@@ -1429,6 +1432,277 @@ Some text between tables...
             cell="12.88",
             top_heading="Table 1    Differences in diagnoses, gender and family status for participants with a suicide attempt and those without a suicide attempt within the 12-month follow-up interval",
         )
+        result, explanation = test.run(table)
+        self.assertTrue(result, explanation)
+
+    @unittest.skip(reason="This fails right now, need to rewrite the table testing code")
+    def test_weird_header(self):
+        table = """
+<table>
+<thead>
+<tr>
+<th>Faculty</th>
+<th>Course</th>
+<th>Sec</th>
+<th>Type</th>
+<th>Course Title</th>
+<th>Days</th>
+<th>Start<br/>Time</th>
+<th>End<br/>Time</th>
+<th>Room</th>
+<th>Office<br/>TAR</th>
+<th>Phone</th>
+<th>Email</th>
+<th>Office Hours in Office or Online<br/>(and by appointment)</th>
+</tr>
+</thead>
+<tbody>
+<tr class="highlight">
+<td class="faculty-name" rowspan="2">Sabbaghi, Mostafa</td>
+<td class="center">QM 301</td>
+<td class="center">2</td>
+<td class="center">F</td>
+<td>Operations Management</td>
+<td class="center">TR</td>
+<td class="center">3:00 PM</td>
+<td class="center">4:15 PM</td>
+<td class="center">BRH110</td>
+<td class="center" rowspan="2">2046</td>
+<td class="center" rowspan="2">6670</td>
+<td class="email" rowspan="2"><a href="mailto:sabbagh@csus.edu">sabbagh@csus.edu</a></td>
+<td class="office-hours" rowspan="2"><span class="bold">TR 115 - 245pm</span></td>
+</tr>
+<tr class="highlight">
+<td class="center">QM 301</td>
+<td class="center">8</td>
+<td class="center">F</td>
+<td>Operations Management</td>
+<td class="center">TR</td>
+<td class="center">4:30 PM</td>
+<td class="center">5:45 PM</td>
+<td class="center">BRH110</td>
+</tr>
+<tr class="highlight">
+<td class="faculty-name" rowspan="4">Shao, Tyra</td>
+<td class="center">MKTG 103</td>
+<td class="center">6</td>
+<td class="center">HY-S</td>
+<td>Mgtmt Contemporary Organiz</td>
+<td class="center">TR</td>
+<td class="center">10:30 AM</td>
+<td class="center">11:45 AM</td>
+<td class="center">UBR021</td>
+<td class="center" rowspan="4">2049</td>
+<td class="center" rowspan="4">6642</td>
+<td class="email" rowspan="4"><a href="mailto:yshao@csus.edu">yshao@csus.edu</a></td>
+<td class="office-hours" rowspan="4">
+<span class="bold red">T 100 - 230pm in office</span><br/>
+<span class="bold">R 100 - 230pm via Zoom</span><br/>
+<a href="https://csus.zoom.us/my/tyrashao">https://csus.zoom.us/my/tyrashao</a>
+</td>
+</tr>
+<tr class="highlight">
+<td class="center">MKTG 103</td>
+<td class="center">4</td>
+<td class="center">HY-S</td>
+<td>Mgtmt Contemporary Organiz</td>
+<td class="center">TR</td>
+<td class="center">12:00 PM</td>
+<td class="center">1:15 PM</td>
+<td class="center">WEBONLINE</td>
+</tr>
+<tr class="highlight">
+<td class="center">MKTG 103</td>
+<td class="center">5</td>
+<td class="center">HY-S</td>
+<td>Mgtmt Contemporary Organiz</td>
+<td class="center">TR</td>
+<td class="center">3:00 PM</td>
+<td class="center">4:15 PM</td>
+<td class="center">ARC0120</td>
+</tr>
+<tr class="highlight">
+<td class="center">MKTG 103</td>
+<td class="center">9</td>
+<td class="center">HY-S</td>
+<td>Mgtmt Contemporary Organiz</td>
+<td class="center">TR</td>
+<td class="center">3:00 PM</td>
+<td class="center">4:15 PM</td>
+<td class="center">WEBONLINE</td>
+</tr>
+<tr class="highlight">
+<td class="faculty-name" rowspan="2">Stanislaus, Selvi</td>
+<td class="center">FIN 140</td>
+<td class="center">2</td>
+<td class="center">F</td>
+<td>Employee Benefits</td>
+<td class="center">TR</td>
+<td class="center">4:30 PM</td>
+<td class="center">5:45 PM</td>
+<td class="center">TAH3001</td>
+<td class="center" rowspan="2">2039</td>
+<td class="center" rowspan="2">6621*</td>
+<td class="email" rowspan="2"><a href="mailto:ss1866@csus.edu">ss1866@csus.edu</a></td>
+<td class="office-hours" rowspan="2">
+<span class="bold">T 545 - 715pm</span><br/>
+<span class="bold">R 545 - 630pm</span><br/>
+<span class="bold">TR 1030am - 1200pm</span>
+</td>
+</tr>
+<tr class="highlight">
+<td class="center">MKTG 140</td>
+<td class="center">2</td>
+<td class="center">F</td>
+<td>MKTG Contemporary Organiz</td>
+<td class="center">MW</td>
+<td class="center">4:30 PM</td>
+<td class="center">5:45 PM</td>
+<td class="center">UBR073</td>
+</tr>
+<tr>
+<td class="faculty-name" rowspan="4">Taylor, Joseph</td>
+<td class="center">MIS 183</td>
+<td class="center">1</td>
+<td class="center">F</td>
+<td>Business Intelligence Applicat</td>
+<td class="center">TR</td>
+<td class="center">12:00 PM</td>
+<td class="center">1:15 PM</td>
+<td class="center">ARC3001</td>
+<td class="center" rowspan="4">2045</td>
+<td class="center" rowspan="4">7122</td>
+<td class="email" rowspan="4"><a href="mailto:joseph.taylor@csus.edu">joseph.taylor@csus.edu</a></td>
+<td class="office-hours" rowspan="4">
+<span class="bold">Department Chair Office Hours</span><br/>
+<span class="bold">TR 830 - 1030am</span>
+</td>
+</tr>
+<tr>
+<td class="center">FIN 19</td>
+<td class="center">2</td>
+<td class="center">GV-A</td>
+<td>Real Estate Principles</td>
+<td></td>
+<td></td>
+<td></td>
+<td class="center">WEBONLINE</td>
+</tr>
+<tr>
+<td class="center">FIN 144</td>
+<td class="center">1</td>
+<td class="center">HY-S</td>
+<td>Real Estate Market Analysis</td>
+<td class="center">TR</td>
+<td class="center">9:00 AM</td>
+<td class="center">10:15 AM</td>
+<td class="center">ARC0120</td>
+</tr>
+<tr>
+<td class="center">FIN 144</td>
+<td class="center">1</td>
+<td class="center">HY-S</td>
+<td>Real Estate Market Analysis</td>
+<td class="center">TR</td>
+<td class="center">9:00 AM</td>
+<td class="center">10:15 AM</td>
+<td class="center">WEBONLINE</td>
+</tr>
+<tr>
+<td class="faculty-name" rowspan="3">Thakur, Sudhir</td>
+<td class="center">FIN 144</td>
+<td class="center">1</td>
+<td class="center">F</td>
+<td>Real Estate Market Analysis</td>
+<td class="center">TR</td>
+<td class="center">12:00 PM</td>
+<td class="center">1:15 PM</td>
+<td class="center">TAH3004</td>
+<td class="center" rowspan="3">2050</td>
+<td class="center" rowspan="3">6259</td>
+<td class="email" rowspan="3"><a href="mailto:thakurs@csus.edu">thakurs@csus.edu</a></td>
+<td class="office-hours" rowspan="3">
+<span class="bold">T 130 - 300pm in office</span><br/>
+<span class="bold red">R 130 - 300pm in office and via zoom</span><br/>
+<a href="https://csus.zoom.us/j/81019731136">https://csus.zoom.us/j/81019731136</a>
+</td>
+</tr>
+<tr>
+<td class="center">MBA 241</td>
+<td class="center">1</td>
+<td class="center">F</td>
+<td>Qty &amp; Process in Healthcare</td>
+<td class="center">R</td>
+<td class="center">6:00 PM</td>
+<td class="center">8:50 PM</td>
+<td class="center">TAH3404</td>
+</tr>
+<tr>
+<td class="center">MKTG 103</td>
+<td class="center">1</td>
+<td class="center">F</td>
+<td>Prin Mktg Mgmt</td>
+<td class="center">TR</td>
+<td class="center">3:00 PM</td>
+<td class="center">4:15 PM</td>
+<td class="center">ARC3001</td>
+</tr>
+<tr>
+<td class="faculty-name" rowspan="2">Thuleen, Peter</td>
+<td class="center">MKTG 103</td>
+<td class="center">1</td>
+<td class="center">F</td>
+<td>Prin Mktg Mgmt</td>
+<td class="center">TR</td>
+<td class="center">1:30 PM</td>
+<td class="center">2:45 PM</td>
+<td class="center">ARC3001</td>
+<td class="center" rowspan="2">2095</td>
+<td class="center" rowspan="2">6868*</td>
+<td class="email" rowspan="2"><a href="mailto:peter.thuleen@csus.edu">peter.thuleen@csus.edu</a></td>
+<td class="office-hours" rowspan="2">
+<span class="bold">TR 300 - 400pm</span><br/>
+<span class="bold">T 600 - 700pm</span>
+</td>
+</tr>
+<tr>
+<td class="center">MKTG 183</td>
+<td class="center">1</td>
+<td class="center">F</td>
+<td>Supply Chain Logistics</td>
+<td class="center">TR</td>
+<td class="center">4:30 PM</td>
+<td class="center">5:45 PM</td>
+<td class="center">UBR021</td>
+</tr>
+<tr class="highlight">
+<td class="faculty-name">Tong, Ping</td>
+<td class="center" colspan="8">Faculty teaching Spring 2023</td>
+<td class="center">2010</td>
+<td class="center">7036</td>
+<td class="email"><a href="mailto:ptong@csus.edu">ptong@csus.edu</a></td>
+<td class="office-hours"><span class="bold">Student &amp; Department Chair Office Hours<br/>W 1000am - 500pm</span></td>
+</tr>
+<tr>
+<td class="faculty-name" rowspan="2">Tran, Hiep</td>
+<td class="center">FIN 101</td>
+<td class="center">10</td>
+<td class="center">F</td>
+<td>Business Finance</td>
+<td class="center">TR</td>
+<td class="center">6:00 PM</td>
+<td class="center">7:15 PM</td>
+<td class="center">MND3011</td>
+<td class="center" rowspan="2">2121</td>
+<td class="center" rowspan="2">7167*</td>
+<td class="email" rowspan="2"><a href="mailto:tranh@csus.edu">tranh@csus.edu</a></td>
+<td class="office-hours" rowspan="2"><span class="bold">TWR 515 - 545pm</span></td>
+</tr>
+</tbody>
+</table>
+"""
+
+        test = TableTest(pdf="test.pdf", page=1, id="test_id", type=TestType.TABLE.value, cell="7036", up= "F", top_heading="Phone")
         result, explanation = test.run(table)
         self.assertTrue(result, explanation)
 

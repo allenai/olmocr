@@ -12,7 +12,7 @@ import re
 import subprocess
 import uuid
 from collections import defaultdict
-from typing import Dict, List
+from typing import Dict, List, Optional, Set
 
 import pypdf
 from anthropic import AsyncAnthropic
@@ -890,34 +890,40 @@ def generate_tests_from_html(html_content: str, pdf_id: str, page_num: int, rand
     table_data_list = parse_html_tables(html_content_with_unicode)
 
     for table_idx, table_data in enumerate(table_data_list):
-        # Get the table data as a numpy array
-        table_array = table_data.data
         table_tests = []
+        cell_positions = list(table_data.cell_text.keys())
 
-        # Skip tables that are too small
-        if table_array.shape[0] < 2 or table_array.shape[1] < 2:
+        if not cell_positions:
             continue
 
-        # Get a limited number of cells to create tests for
-        # Select random rows and columns, excluding header rows/columns
-        non_header_rows = [i for i in range(table_array.shape[0]) if i not in table_data.header_rows]
-        non_header_cols = [j for j in range(table_array.shape[1]) if j not in table_data.header_cols]
+        unique_rows = {row for row, _ in cell_positions}
+        unique_cols = {col for _, col in cell_positions}
 
-        # If we don't have enough non-header cells, use all cells
-        if len(non_header_rows) < 2 or len(non_header_cols) < 2:
-            cell_positions = [(i, j) for i in range(table_array.shape[0]) for j in range(table_array.shape[1])]
+        # Skip tables that are too small
+        if len(unique_rows) < 2 or len(unique_cols) < 2:
+            continue
+
+        non_heading_positions = [pos for pos in cell_positions if pos not in table_data.heading_cells]
+        candidates = non_heading_positions if len(non_heading_positions) >= 2 else cell_positions
+
+        if len(candidates) > 6:
+            selected_positions = random_gen.sample(candidates, 6)
         else:
-            cell_positions = [
-                (i, j)
-                for i in random_gen.sample(non_header_rows, min(3, len(non_header_rows)))
-                for j in random_gen.sample(non_header_cols, min(2, len(non_header_cols)))
-            ]
+            selected_positions = candidates[:]
 
-        random_gen.shuffle(cell_positions)
+        random_gen.shuffle(selected_positions)
 
-        # Create tests for each selected cell
-        for row_idx, col_idx in cell_positions:
-            cell_text = str(table_array[row_idx, col_idx]).strip()
+        def pick_relation_text(position: tuple[int, int], relations: Dict[tuple[int, int], Set[tuple[int, int]]]) -> Optional[str]:
+            neighbors = relations.get(position, set())
+            for neighbor in sorted(neighbors):
+                neighbor_text = table_data.cell_text.get(neighbor, "").strip()
+                if neighbor_text and "\n" not in neighbor_text:
+                    return neighbor_text
+            return None
+
+        for position in selected_positions:
+            row_idx, col_idx = position
+            cell_text = table_data.cell_text.get(position, "").strip()
 
             # Skip cells with minimal text
             if not cell_text or len(cell_text) < 3:
@@ -934,52 +940,30 @@ def generate_tests_from_html(html_content: str, pdf_id: str, page_num: int, rand
                 "ignore_markdown_tables": True,
             }
 
-            # Check cell up
-            if row_idx > 0:
-                up_text = str(table_array[row_idx - 1, col_idx]).strip()
-                if up_text and "\n" not in up_text:
-                    test_data["up"] = up_text
+            up_text = pick_relation_text(position, table_data.up_relations)
+            if up_text:
+                test_data["up"] = up_text
 
-            # Check cell down
-            if row_idx < table_array.shape[0] - 1:
-                down_text = str(table_array[row_idx + 1, col_idx]).strip()
-                if down_text and "\n" not in down_text:
-                    test_data["down"] = down_text
+            down_text = pick_relation_text(position, table_data.down_relations)
+            if down_text:
+                test_data["down"] = down_text
 
-            # Check cell left
-            if col_idx > 0:
-                left_text = str(table_array[row_idx, col_idx - 1]).strip()
-                if left_text and "\n" not in left_text:
-                    test_data["left"] = left_text
+            left_text = pick_relation_text(position, table_data.left_relations)
+            if left_text:
+                test_data["left"] = left_text
 
-            # Check cell right
-            if col_idx < table_array.shape[1] - 1:
-                right_text = str(table_array[row_idx, col_idx + 1]).strip()
-                if right_text and "\n" not in right_text:
-                    test_data["right"] = right_text
+            right_text = pick_relation_text(position, table_data.right_relations)
+            if right_text:
+                test_data["right"] = right_text
 
-            # Check if current cell is a heading cell
-            is_header_cell = row_idx in table_data.header_rows or col_idx in table_data.header_cols
+            if position not in table_data.heading_cells:
+                top_heading = pick_relation_text(position, table_data.top_heading_relations)
+                if top_heading:
+                    test_data["top_heading"] = top_heading
 
-            # Check for top heading using header information (skip if current cell is a heading)
-            if not is_header_cell and col_idx in table_data.col_headers:
-                # Get the headers for this column
-                col_headers = table_data.col_headers[col_idx]
-                if col_headers:
-                    # Use the first header as the top heading
-                    _, top_heading = col_headers[0]
-                    if top_heading and "\n" not in top_heading:
-                        test_data["top_heading"] = top_heading
-
-            # Check for left heading using header information (skip if current cell is a heading)
-            if not is_header_cell and row_idx in table_data.row_headers:
-                # Get the headers for this row
-                row_headers = table_data.row_headers[row_idx]
-                if row_headers:
-                    # Use the first header as the left heading
-                    _, left_heading = row_headers[0]
-                    if left_heading and "\n" not in left_heading:
-                        test_data["left_heading"] = left_heading
+                left_heading = pick_relation_text(position, table_data.left_heading_relations)
+                if left_heading:
+                    test_data["left_heading"] = left_heading
 
             # Only add the test if we have at least one relation
             if any(x in test_data for x in ["up", "down", "left", "right", "top_heading", "left_heading"]):

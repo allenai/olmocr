@@ -2,12 +2,11 @@ import json
 import os
 import re
 import unicodedata
+from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass
 from enum import Enum
 from typing import Dict, List, Optional, Set, Tuple, Union
-
-import numpy as np
 from bs4 import BeautifulSoup
 from fuzzysearch import find_near_matches
 from rapidfuzz import fuzz
@@ -20,77 +19,26 @@ from .katex.render import compare_rendered_equations, render_equation
 # Tell pytest these are not tests
 __test__ = False
 
-
-@dataclass
+@dataclass(frozen=True)
 class TableData:
-    """Class to hold table data and metadata about headers."""
+    """Class which holds table data as a graph of cells. Ex. you can access the value at any row, col
+    However, you can also ask, given a row, col, which set of row,col pairs is "left", "right", "up", and "down"
+    from that one. There can be multiple values returned, because rowspans and colspans mean that you can have multiple cells in each direction.
 
-    data: np.ndarray  # The actual table data
-    header_rows: Set[int] = field(default_factory=set)  # Indices of rows that are headers
-    header_cols: Set[int] = field(default_factory=set)  # Indices of columns that are headers
-    col_headers: dict = field(default_factory=dict)  # Maps column index to header text, handling colspan
-    row_headers: dict = field(default_factory=dict)  # Maps row index to header text, handling rowspan
+    Further more, you can also query "top_heading" and "left_heading". Where we also mark cells that are considered "headings", ex. if they are in a thead
+    html tag.
+    Then, for each cell, you may request top_heading/left_heading, which returns all cell positions that are headings in those directions
+    """
+    cell_text: Dict[tuple[int, int], str] # Stores map from row, col to cell text
+    heading_cells: Set[tuple[int, int]] # Contains the row, col pairs which are headings
 
-    def __repr__(self) -> str:
-        """Returns a concise representation of the TableData object for debugging."""
-        return f"TableData(shape={self.data.shape}, header_rows={len(self.header_rows)}, header_cols={len(self.header_cols)})"
+    up_relations: Dict[tuple[int, int], Set[tuple[int, int]]]
+    down_relations: Dict[tuple[int, int], Set[tuple[int, int]]]
+    left_relations: Dict[tuple[int, int], Set[tuple[int, int]]]
+    right_relations: Dict[tuple[int, int], Set[tuple[int, int]]]
 
-    def __str__(self) -> str:
-        """Returns a pretty string representation of the table with header information."""
-        output = []
-
-        # Table dimensions
-        output.append(f"Table: {self.data.shape[0]} rows × {self.data.shape[1]} columns")
-
-        # Header info
-        output.append(f"Header rows: {sorted(self.header_rows)}")
-        output.append(f"Header columns: {sorted(self.header_cols)}")
-
-        # Table content with formatting
-        separator = "+" + "+".join(["-" * 17] * self.data.shape[1]) + "+"
-
-        # Add a header for row indices
-        output.append(separator)
-        headers = [""] + [f"Column {i}" for i in range(self.data.shape[1])]
-        output.append("| {:<5} | ".format("Row") + " | ".join(["{:<15}".format(h) for h in headers[1:]]) + " |")
-        output.append(separator)
-
-        # Format each row
-        for i in range(min(self.data.shape[0], 15)):  # Limit to 15 rows for readability
-            # Format cells, mark header cells
-            cells = []
-            for j in range(self.data.shape[1]):
-                cell = str(self.data[i, j])
-                if len(cell) > 15:
-                    cell = cell[:12] + "..."
-                # Mark header cells with *
-                if i in self.header_rows or j in self.header_cols:
-                    cell = f"*{cell}*"
-                cells.append(cell)
-
-            row_str = "| {:<5} | ".format(i) + " | ".join(["{:<15}".format(c) for c in cells]) + " |"
-            output.append(row_str)
-            output.append(separator)
-
-        # If table is too large, indicate truncation
-        if self.data.shape[0] > 15:
-            output.append(f"... {self.data.shape[0] - 15} more rows ...")
-
-        # Column header details if available
-        if self.col_headers:
-            output.append("\nColumn header mappings:")
-            for col, headers in sorted(self.col_headers.items()):
-                header_strs = [f"({row}, '{text}')" for row, text in headers]
-                output.append(f"  Column {col}: {', '.join(header_strs)}")
-
-        # Row header details if available
-        if self.row_headers:
-            output.append("\nRow header mappings:")
-            for row, headers in sorted(self.row_headers.items()):
-                header_strs = [f"({col}, '{text}')" for col, text in headers]
-                output.append(f"  Row {row}: {', '.join(header_strs)}")
-
-        return "\n".join(output)
+    top_heading_relations: Dict[tuple[int, int], Set[tuple[int, int]]]
+    left_heading_relations: Dict[tuple[int, int], Set[tuple[int, int]]]
 
 
 class TestType(str, Enum):
@@ -146,6 +94,226 @@ def normalize_text(md_content: str) -> str:
     return md_content
 
 
+def _safe_span_int(value: Optional[Union[str, int]], default: int = 1) -> int:
+    """Convert rowspan/colspan attributes to positive integers."""
+    if value in (None, "", 0):
+        return default
+    try:
+        span = int(value)
+    except (TypeError, ValueError):
+        return default
+    if span <= 0:
+        return default
+    return span
+
+
+def _build_table_data_from_specs(row_specs: List[List[Dict[str, Union[str, int, bool]]]]) -> Optional[TableData]:
+    """
+    Build a TableData object from a list of row specifications.
+
+    Each row specification is a list of dictionaries with keys:
+        - text: cell text content
+        - rowspan: integer rowspan (>= 1)
+        - colspan: integer colspan (>= 1)
+        - is_heading: bool indicating if the cell should be treated as a heading
+    """
+    if not row_specs:
+        return None
+
+    cell_text: Dict[Tuple[int, int], str] = {}
+    heading_cells: Set[Tuple[int, int]] = set()
+    cell_meta: Dict[Tuple[int, int], Dict[str, Union[int, bool]]] = {}
+    occupancy: List[List[Optional[Tuple[int, int]]]] = []
+    active_rowspans: List[Optional[Tuple[Tuple[int, int], int]]] = []
+
+    for row_idx, cells in enumerate(row_specs):
+        row_entries: List[Optional[Tuple[int, int]]] = []
+        col_index = 0
+        spec_idx = 0
+        total_specs = len(cells)
+
+        while spec_idx < total_specs or col_index < len(active_rowspans):
+            if col_index < len(active_rowspans) and active_rowspans[col_index] is not None:
+                cell_id, remaining = active_rowspans[col_index]
+                row_entries.append(cell_id)
+                remaining -= 1
+                active_rowspans[col_index] = (cell_id, remaining) if remaining > 0 else None
+                col_index += 1
+                continue
+
+            if spec_idx >= total_specs:
+                if col_index < len(active_rowspans):
+                    row_entries.append(None)
+                    col_index += 1
+                    continue
+                break
+
+            spec = cells[spec_idx]
+            spec_idx += 1
+
+            text = spec.get("text", "") or ""
+            rowspan = spec.get("rowspan", 1)
+            colspan = spec.get("colspan", 1)
+            is_heading = bool(spec.get("is_heading", False))
+
+            rowspan = rowspan if isinstance(rowspan, int) else _safe_span_int(rowspan)
+            colspan = colspan if isinstance(colspan, int) else _safe_span_int(colspan)
+            rowspan = max(1, rowspan)
+            colspan = max(1, colspan)
+
+            cell_id = (row_idx, col_index)
+            cell_text[cell_id] = text
+            if is_heading:
+                heading_cells.add(cell_id)
+
+            cell_meta[cell_id] = {
+                "row": row_idx,
+                "col": col_index,
+                "rowspan": rowspan,
+                "colspan": colspan,
+            }
+
+            required_len = col_index + colspan
+            if len(active_rowspans) < required_len:
+                active_rowspans.extend([None] * (required_len - len(active_rowspans)))
+
+            for offset in range(colspan):
+                current_col = col_index + offset
+                row_entries.append(cell_id)
+                if rowspan > 1:
+                    active_rowspans[current_col] = (cell_id, rowspan - 1)
+                else:
+                    active_rowspans[current_col] = None
+
+            col_index += colspan
+
+        occupancy.append(row_entries)
+
+    # Flush any remaining active rowspans into additional rows
+    while any(entry is not None for entry in active_rowspans):
+        row_entries: List[Optional[Tuple[int, int]]] = []
+        for col_index, span_entry in enumerate(active_rowspans):
+            if span_entry is None:
+                row_entries.append(None)
+                continue
+            cell_id, remaining = span_entry
+            row_entries.append(cell_id)
+            remaining -= 1
+            active_rowspans[col_index] = (cell_id, remaining) if remaining > 0 else None
+        occupancy.append(row_entries)
+
+    if not cell_text:
+        return None
+
+    # Normalize occupancy to a consistent width based on populated columns
+    valid_columns = {idx for row in occupancy for idx, value in enumerate(row) if value is not None}
+    if valid_columns:
+        table_width = max(valid_columns) + 1
+        for row in occupancy:
+            if len(row) < table_width:
+                row.extend([None] * (table_width - len(row)))
+            elif len(row) > table_width:
+                del row[table_width:]
+    else:
+        return None
+
+    table_height = len(occupancy)
+
+    up_rel = defaultdict(set)
+    down_rel = defaultdict(set)
+    left_rel = defaultdict(set)
+    right_rel = defaultdict(set)
+    top_heading_rel = defaultdict(set)
+    left_heading_rel = defaultdict(set)
+
+    for cell_id, meta in cell_meta.items():
+        row_start = meta["row"]
+        col_start = meta["col"]
+        rowspan = meta["rowspan"]
+        colspan = meta["colspan"]
+        row_end = row_start + rowspan - 1
+        col_end = col_start + colspan - 1
+
+        # Right relations
+        for row in range(row_start, row_end + 1):
+            for col in range(col_end + 1, table_width):
+                neighbor = occupancy[row][col]
+                if neighbor is None or neighbor == cell_id:
+                    continue
+                right_rel[cell_id].add(neighbor)
+                break
+
+        # Left relations
+        for row in range(row_start, row_end + 1):
+            for col in range(col_start - 1, -1, -1):
+                neighbor = occupancy[row][col]
+                if neighbor is None or neighbor == cell_id:
+                    continue
+                left_rel[cell_id].add(neighbor)
+                break
+
+        # Down relations
+        for col in range(col_start, col_end + 1):
+            for row in range(row_end + 1, table_height):
+                if col >= len(occupancy[row]):
+                    continue
+                neighbor = occupancy[row][col]
+                if neighbor is None or neighbor == cell_id:
+                    continue
+                down_rel[cell_id].add(neighbor)
+                break
+
+        # Up relations
+        for col in range(col_start, col_end + 1):
+            for row in range(row_start - 1, -1, -1):
+                neighbor = occupancy[row][col]
+                if neighbor is None or neighbor == cell_id:
+                    continue
+                up_rel[cell_id].add(neighbor)
+                break
+
+        # Top heading relations
+        for col in range(col_start, col_end + 1):
+            seen = set()
+            for row in range(row_start - 1, -1, -1):
+                neighbor = occupancy[row][col]
+                if neighbor is None or neighbor == cell_id or neighbor in seen:
+                    continue
+                seen.add(neighbor)
+                if neighbor in heading_cells:
+                    top_heading_rel[cell_id].add(neighbor)
+
+        # Left heading relations
+        for row in range(row_start, row_end + 1):
+            seen = set()
+            for col in range(col_start - 1, -1, -1):
+                neighbor = occupancy[row][col]
+                if neighbor is None or neighbor == cell_id or neighbor in seen:
+                    continue
+                seen.add(neighbor)
+                if neighbor in heading_cells:
+                    left_heading_rel[cell_id].add(neighbor)
+
+    # Ensure every cell has an entry in relations dictionaries
+    up_relations = {cell_id: set(up_rel[cell_id]) for cell_id in cell_text}
+    down_relations = {cell_id: set(down_rel[cell_id]) for cell_id in cell_text}
+    left_relations = {cell_id: set(left_rel[cell_id]) for cell_id in cell_text}
+    right_relations = {cell_id: set(right_rel[cell_id]) for cell_id in cell_text}
+    top_heading_relations = {cell_id: set(top_heading_rel[cell_id]) for cell_id in cell_text}
+    left_heading_relations = {cell_id: set(left_heading_rel[cell_id]) for cell_id in cell_text}
+
+    return TableData(
+        cell_text=cell_text,
+        heading_cells=heading_cells,
+        up_relations=up_relations,
+        down_relations=down_relations,
+        left_relations=left_relations,
+        right_relations=right_relations,
+        top_heading_relations=top_heading_relations,
+        left_heading_relations=left_heading_relations,
+    )
+
+
 def parse_markdown_tables(md_content: str) -> List[TableData]:
     """
     Extract and parse all markdown tables from the provided content.
@@ -183,74 +351,46 @@ def parse_markdown_tables(md_content: str) -> List[TableData]:
                 if len(current_table_lines) >= 2:
                     table_data = _process_table_lines(current_table_lines)
                     if table_data and len(table_data) > 0:
-                        # Convert to numpy array for easier manipulation
-                        max_cols = max(len(row) for row in table_data)
-                        padded_data = [row + [""] * (max_cols - len(row)) for row in table_data]
-                        table_array = np.array(padded_data)
-
-                        # In markdown tables, the first row is typically a header row
-                        header_rows = {0} if len(table_array) > 0 else set()
-
-                        # Set up col_headers with first row headers for each column
-                        col_headers = {}
-                        if len(table_array) > 0:
-                            for col_idx in range(table_array.shape[1]):
-                                if col_idx < len(table_array[0]):
-                                    col_headers[col_idx] = [(0, table_array[0, col_idx])]
-
-                        # Set up row_headers with first column headers for each row
-                        row_headers = {}
-                        if table_array.shape[1] > 0:
-                            for row_idx in range(1, table_array.shape[0]):  # Skip header row
-                                row_headers[row_idx] = [(0, table_array[row_idx, 0])]  # First column as heading
-
-                        # Create TableData object
-                        parsed_tables.append(
-                            TableData(
-                                data=table_array,
-                                header_rows=header_rows,
-                                header_cols={0} if table_array.shape[1] > 0 else set(),  # First column as header
-                                col_headers=col_headers,
-                                row_headers=row_headers,
+                        row_specs: List[List[Dict[str, Union[str, int, bool]]]] = []
+                        for row_idx, row in enumerate(table_data):
+                            row_specs.append(
+                                [
+                                    {
+                                        "text": cell,
+                                        "rowspan": 1,
+                                        "colspan": 1,
+                                        "is_heading": row_idx == 0 or col_idx == 0,
+                                    }
+                                    for col_idx, cell in enumerate(row)
+                                ]
                             )
-                        )
+
+                        table = _build_table_data_from_specs(row_specs)
+                        if table:
+                            parsed_tables.append(table)
                 in_table = False
 
     # Process the last table if we're still tracking one at the end of the file
     if in_table and len(current_table_lines) >= 2:
         table_data = _process_table_lines(current_table_lines)
         if table_data and len(table_data) > 0:
-            # Convert to numpy array
-            max_cols = max(len(row) for row in table_data)
-            padded_data = [row + [""] * (max_cols - len(row)) for row in table_data]
-            table_array = np.array(padded_data)
-
-            # In markdown tables, the first row is typically a header row
-            header_rows = {0} if len(table_array) > 0 else set()
-
-            # Set up col_headers with first row headers for each column
-            col_headers = {}
-            if len(table_array) > 0:
-                for col_idx in range(table_array.shape[1]):
-                    if col_idx < len(table_array[0]):
-                        col_headers[col_idx] = [(0, table_array[0, col_idx])]
-
-            # Set up row_headers with first column headers for each row
-            row_headers = {}
-            if table_array.shape[1] > 0:
-                for row_idx in range(1, table_array.shape[0]):  # Skip header row
-                    row_headers[row_idx] = [(0, table_array[row_idx, 0])]  # First column as heading
-
-            # Create TableData object
-            parsed_tables.append(
-                TableData(
-                    data=table_array,
-                    header_rows=header_rows,
-                    header_cols={0} if table_array.shape[1] > 0 else set(),  # First column as header
-                    col_headers=col_headers,
-                    row_headers=row_headers,
+            row_specs = []
+            for row_idx, row in enumerate(table_data):
+                row_specs.append(
+                    [
+                        {
+                            "text": cell,
+                            "rowspan": 1,
+                            "colspan": 1,
+                            "is_heading": row_idx == 0 or col_idx == 0,
+                        }
+                        for col_idx, cell in enumerate(row)
+                    ]
                 )
-            )
+
+            table = _build_table_data_from_specs(row_specs)
+            if table:
+                parsed_tables.append(table)
 
     return parsed_tables
 
@@ -318,155 +458,42 @@ def parse_html_tables(html_content: str) -> List[TableData]:
     parsed_tables = []
 
     for table in tables:
-        rows = table.find_all(["tr"])
-        table_data = []
-        header_rows = set()
-        header_cols = set()
-        col_headers = {}  # Maps column index to all header cells above it
-        row_headers = {}  # Maps row index to all header cells to its left
+        rows = table.find_all("tr")
+        if not rows:
+            continue
 
-        # Find rows inside thead tags - these are definitely header rows
-        thead = table.find("thead")
-        if thead:
-            thead_rows = thead.find_all("tr")
-            for tr in thead_rows:
-                header_rows.add(rows.index(tr))
+        row_specs: List[List[Dict[str, Union[str, int, bool]]]] = []
+        total_rows = len(rows)
 
-        # Initialize a grid to track filled cells due to rowspan/colspan
-        cell_grid = {}
-        col_span_info = {}  # Tracks which columns contain headers
-        row_span_info = {}  # Tracks which rows contain headers
-
-        # First pass: process each row to build the raw table data and identify headers
         for row_idx, row in enumerate(rows):
-            cells = row.find_all(["th", "td"])
-            row_data = []
-            col_idx = 0
+            cells = row.find_all(["th", "td"], recursive=False)
+            heading_context = row.find_parent("thead") is not None
 
-            # If there are th elements in this row, it's likely a header row
-            if row.find("th"):
-                header_rows.add(row_idx)
-
+            row_spec: List[Dict[str, Union[str, int, bool]]] = []
             for cell in cells:
-                # Skip positions already filled by rowspans from above
-                while (row_idx, col_idx) in cell_grid:
-                    row_data.append(cell_grid[(row_idx, col_idx)])
-                    col_idx += 1
-
-                # Replace <br> and <br/> tags with newlines before getting text
                 for br in cell.find_all("br"):
                     br.replace_with("\n")
-                cell_text = cell.get_text().strip()
 
-                # Handle rowspan/colspan
-                rowspan = int(cell.get("rowspan", 1))
-                colspan = int(cell.get("colspan", 1))
+                text = cell.get_text(separator="\n").strip()
+                raw_rowspan = cell.get("rowspan")
+                raw_colspan = cell.get("colspan")
 
-                # Add the cell to the row data
-                row_data.append(cell_text)
+                rowspan = _safe_span_int(raw_rowspan, 1)
+                colspan = _safe_span_int(raw_colspan, 1)
 
-                # Fill the grid for this cell and its rowspan/colspan
-                for i in range(rowspan):
-                    for j in range(colspan):
-                        if i == 0 and j == 0:
-                            continue  # Skip the main cell position
-                        # For rowspan cells, preserve the text in all spanned rows
-                        if j == 0 and i > 0:  # Only for cells directly below
-                            cell_grid[(row_idx + i, col_idx + j)] = cell_text
-                        else:
-                            cell_grid[(row_idx + i, col_idx + j)] = ""  # Mark other spans as empty
+                # HTML specifies rowspan=0 to extend to the end of the table section
+                if isinstance(raw_rowspan, str) and raw_rowspan.strip() == "0":
+                    rowspan = max(1, total_rows - row_idx)
 
-                # If this is a header cell (th), mark it and its span
-                if cell.name == "th":
-                    # Mark columns as header columns
-                    for j in range(colspan):
-                        header_cols.add(col_idx + j)
+                is_heading = cell.name == "th" or heading_context
 
-                    # For rowspan, mark spanned rows as part of header
-                    for i in range(1, rowspan):
-                        if row_idx + i < len(rows):
-                            header_rows.add(row_idx + i)
+                row_spec.append({"text": text, "rowspan": rowspan, "colspan": colspan, "is_heading": is_heading})
 
-                    # Record this header for all spanned columns
-                    for j in range(colspan):
-                        curr_col = col_idx + j
-                        if curr_col not in col_headers:
-                            col_headers[curr_col] = []
-                        col_headers[curr_col].append((row_idx, cell_text))
+            row_specs.append(row_spec)
 
-                        # Store which columns are covered by this header
-                        if cell_text and colspan > 1:
-                            if cell_text not in col_span_info:
-                                col_span_info[cell_text] = set()
-                            col_span_info[cell_text].add(curr_col)
-
-                    # Store which rows are covered by this header for rowspan
-                    if cell_text and rowspan > 1:
-                        if cell_text not in row_span_info:
-                            row_span_info[cell_text] = set()
-                        for i in range(rowspan):
-                            row_span_info[cell_text].add(row_idx + i)
-
-                # Also handle row headers from data cells that have rowspan
-                if cell.name == "td" and rowspan > 1 and col_idx in header_cols:
-                    for i in range(1, rowspan):
-                        if row_idx + i < len(rows):
-                            if row_idx + i not in row_headers:
-                                row_headers[row_idx + i] = []
-                            row_headers[row_idx + i].append((col_idx, cell_text))
-
-                col_idx += colspan
-
-            # Pad the row if needed to handle different row lengths
-            table_data.append(row_data)
-
-        # Second pass: expand headers to cells that should inherit them
-        # First handle column headers
-        for header_text, columns in col_span_info.items():
-            for col in columns:
-                # Add this header to all columns it spans over
-                for row_idx in range(len(table_data)):
-                    if row_idx not in header_rows:  # Only apply to data rows
-                        for j in range(col, len(table_data[row_idx]) if row_idx < len(table_data) else 0):
-                            # Add header info to data cells in these columns
-                            if j not in col_headers:
-                                col_headers[j] = []
-                            if not any(h[1] == header_text for h in col_headers[j]):
-                                header_row = min([r for r, t in col_headers.get(col, [(0, "")])])
-                                col_headers[j].append((header_row, header_text))
-
-        # Handle row headers
-        for header_text, rows in row_span_info.items():
-            for row in rows:
-                if row < len(table_data):
-                    # Find first header column
-                    header_col = min(header_cols) if header_cols else 0
-                    if row not in row_headers:
-                        row_headers[row] = []
-                    if not any(h[1] == header_text for h in row_headers.get(row, [])):
-                        row_headers[row].append((header_col, header_text))
-
-        # Process regular row headers - each cell in a header column becomes a header for its row
-        for col_idx in header_cols:
-            for row_idx, row in enumerate(table_data):
-                if col_idx < len(row) and row[col_idx].strip():
-                    if row_idx not in row_headers:
-                        row_headers[row_idx] = []
-                    if not any(h[1] == row[col_idx] for h in row_headers.get(row_idx, [])):
-                        row_headers[row_idx].append((col_idx, row[col_idx]))
-
-        # Calculate max columns for padding
-        max_cols = max(len(row) for row in table_data) if table_data else 0
-
-        # Ensure all rows have the same number of columns
+        table_data = _build_table_data_from_specs(row_specs)
         if table_data:
-            padded_data = [row + [""] * (max_cols - len(row)) for row in table_data]
-            table_array = np.array(padded_data)
-
-            # Create TableData object with the table and header information
-            parsed_tables.append(
-                TableData(data=table_array, header_rows=header_rows, header_cols=header_cols, col_headers=col_headers, row_headers=row_headers)
-            )
+            parsed_tables.append(table_data)
 
     return parsed_tables
 
@@ -688,169 +715,75 @@ class TableTest(BasePDFTest):
 
         # Check each table
         for table_data in tables_to_check:
-            # Removed debug print statement
-            table_array = table_data.data
-            header_rows = table_data.header_rows
-            header_cols = table_data.header_cols
-
-            # Find all cells that match the target cell using fuzzy matching
+            normalized_cell_text = {pos: (normalize_text(text) or "") for pos, text in table_data.cell_text.items()}
             matches = []
-            for i in range(table_array.shape[0]):
-                for j in range(table_array.shape[1]):
-                    cell_content = normalize_text(table_array[i, j])
-                    similarity = fuzz.ratio(self.cell, cell_content) / 100.0
+            for position, cell_content in normalized_cell_text.items():
+                similarity = fuzz.ratio(self.cell, cell_content) / 100.0
+                if similarity >= threshold:
+                    matches.append(position)
 
-                    if similarity >= threshold:
-                        matches.append((i, j))
-
-            # If no matches found in this table, continue to the next table
             if not matches:
                 continue
 
-            # Check the relationships for each matching cell
-            for row_idx, col_idx in matches:
+            def evaluate_relation(
+                target_pos: Tuple[int, int],
+                expected_text: str,
+                relations: Dict[Tuple[int, int], Set[Tuple[int, int]]],
+                label: str,
+            ) -> Optional[str]:
+                if not expected_text:
+                    return None
+
+                neighbors = relations.get(target_pos, set())
+                if not neighbors:
+                    return f"No {label} found for cell at {target_pos}"
+
+                direction_threshold = max(0.5, 1.0 - (self.max_diffs / max(len(expected_text), 1)))
+                best_similarity = -1.0
+                best_match = ""
+
+                for neighbor_pos in neighbors:
+                    neighbor_text = normalized_cell_text.get(neighbor_pos, "")
+                    similarity = fuzz.ratio(expected_text, neighbor_text) / 100.0
+                    if similarity > best_similarity:
+                        best_similarity = similarity
+                        best_match = neighbor_text
+                    
+                    if best_similarity >= direction_threshold:
+                        return None
+
+                if best_match:
+                    return f"{label.title()} '{best_match}' doesn't match expected '{expected_text}' (similarity: {best_similarity:.2f})"
+                return f"No {label} found for cell at {target_pos}"
+
+            for target_pos in matches:
                 all_relationships_satisfied = True
                 current_failed_reasons = []
 
-                # Check up relationship
-                if self.up and row_idx > 0:
-                    up_cell = normalize_text(table_array[row_idx - 1, col_idx])
-                    up_similarity = fuzz.ratio(self.up, up_cell) / 100.0
-                    if up_similarity < max(0.5, 1.0 - (self.max_diffs / (len(self.up) if len(self.up) > 0 else 1))):
-                        all_relationships_satisfied = False
-                        current_failed_reasons.append(f"Cell above '{up_cell}' doesn't match expected '{self.up}' (similarity: {up_similarity:.2f})")
+                for expected, relations, label in [
+                    (self.up, table_data.up_relations, "up"),
+                    (self.down, table_data.down_relations, "down"),
+                    (self.left, table_data.left_relations, "left"),
+                    (self.right, table_data.right_relations, "right"),
+                ]:
+                    if expected:
+                        error = evaluate_relation(target_pos, expected, relations, label)
+                        if error:
+                            all_relationships_satisfied = False
+                            current_failed_reasons.append(error)
 
-                # Check down relationship
-                if self.down and row_idx < table_array.shape[0] - 1:
-                    down_cell = normalize_text(table_array[row_idx + 1, col_idx])
-                    down_similarity = fuzz.ratio(self.down, down_cell) / 100.0
-                    if down_similarity < max(0.5, 1.0 - (self.max_diffs / (len(self.down) if len(self.down) > 0 else 1))):
-                        all_relationships_satisfied = False
-                        current_failed_reasons.append(f"Cell below '{down_cell}' doesn't match expected '{self.down}' (similarity: {down_similarity:.2f})")
-
-                # Check left relationship
-                if self.left and col_idx > 0:
-                    left_cell = normalize_text(table_array[row_idx, col_idx - 1])
-                    left_similarity = fuzz.ratio(self.left, left_cell) / 100.0
-                    if left_similarity < max(0.5, 1.0 - (self.max_diffs / (len(self.left) if len(self.left) > 0 else 1))):
-                        all_relationships_satisfied = False
-                        current_failed_reasons.append(
-                            f"Cell to the left '{left_cell}' doesn't match expected '{self.left}' (similarity: {left_similarity:.2f})"
-                        )
-
-                # Check right relationship
-                if self.right and col_idx < table_array.shape[1] - 1:
-                    right_cell = normalize_text(table_array[row_idx, col_idx + 1])
-                    right_similarity = fuzz.ratio(self.right, right_cell) / 100.0
-                    if right_similarity < max(0.5, 1.0 - (self.max_diffs / (len(self.right) if len(self.right) > 0 else 1))):
-                        all_relationships_satisfied = False
-                        current_failed_reasons.append(
-                            f"Cell to the right '{right_cell}' doesn't match expected '{self.right}' (similarity: {right_similarity:.2f})"
-                        )
-
-                # Check top heading relationship
                 if self.top_heading:
-                    # Try to find a match in the column headers
-                    top_heading_found = False
-                    best_match = ""
-                    best_similarity = 0
-
-                    # Check the col_headers dictionary first (this handles colspan properly)
-                    if col_idx in table_data.col_headers:
-                        for _, header_text in table_data.col_headers[col_idx]:
-                            header_text = normalize_text(header_text)
-                            similarity = fuzz.ratio(self.top_heading, header_text) / 100.0
-                            if similarity > best_similarity:
-                                best_similarity = similarity
-                                best_match = header_text
-                                if best_similarity >= max(0.5, 1.0 - (self.max_diffs / (len(self.top_heading) if len(self.top_heading) > 0 else 1))):
-                                    top_heading_found = True
-                                    break
-
-                    # If no match found in col_headers, fall back to checking header rows
-                    if not top_heading_found and header_rows:
-                        for i in sorted(header_rows):
-                            if i < row_idx and table_array[i, col_idx].strip():
-                                header_text = normalize_text(table_array[i, col_idx])
-                                similarity = fuzz.ratio(self.top_heading, header_text) / 100.0
-                                if similarity > best_similarity:
-                                    best_similarity = similarity
-                                    best_match = header_text
-                                    if best_similarity >= max(0.5, 1.0 - (self.max_diffs / (len(self.top_heading) if len(self.top_heading) > 0 else 1))):
-                                        top_heading_found = True
-                                        break
-
-                    # If still no match, use any non-empty cell above as a last resort
-                    if not top_heading_found and not best_match and row_idx > 0:
-                        for i in range(row_idx):
-                            if table_array[i, col_idx].strip():
-                                header_text = normalize_text(table_array[i, col_idx])
-                                similarity = fuzz.ratio(self.top_heading, header_text) / 100.0
-                                if similarity > best_similarity:
-                                    best_similarity = similarity
-                                    best_match = header_text
-
-                    if not best_match:
+                    error = evaluate_relation(target_pos, self.top_heading, table_data.top_heading_relations, "top heading")
+                    if error:
                         all_relationships_satisfied = False
-                        current_failed_reasons.append(f"No top heading found for cell at ({row_idx}, {col_idx})")
-                    elif best_similarity < max(0.5, 1.0 - (self.max_diffs / (len(self.top_heading) if len(self.top_heading) > 0 else 1))):
-                        all_relationships_satisfied = False
-                        current_failed_reasons.append(
-                            f"Top heading '{best_match}' doesn't match expected '{self.top_heading}' (similarity: {best_similarity:.2f})"
-                        )
+                        current_failed_reasons.append(error)
 
-                # Check left heading relationship
                 if self.left_heading:
-                    # Try to find a match in the row headers
-                    left_heading_found = False
-                    best_match = ""
-                    best_similarity = 0
-
-                    # Check the row_headers dictionary first (this handles rowspan properly)
-                    if row_idx in table_data.row_headers:
-                        for _, header_text in table_data.row_headers[row_idx]:
-                            header_text = normalize_text(header_text)
-                            similarity = fuzz.ratio(self.left_heading, header_text) / 100.0
-                            if similarity > best_similarity:
-                                best_similarity = similarity
-                                best_match = header_text
-                                if best_similarity >= max(0.5, 1.0 - (self.max_diffs / (len(self.left_heading) if len(self.left_heading) > 0 else 1))):
-                                    left_heading_found = True
-                                    break
-
-                    # If no match found in row_headers, fall back to checking header columns
-                    if not left_heading_found and header_cols:
-                        for j in sorted(header_cols):
-                            if j < col_idx and table_array[row_idx, j].strip():
-                                header_text = normalize_text(table_array[row_idx, j])
-                                similarity = fuzz.ratio(self.left_heading, header_text) / 100.0
-                                if similarity > best_similarity:
-                                    best_similarity = similarity
-                                    best_match = header_text
-                                    if best_similarity >= max(0.5, 1.0 - (self.max_diffs / (len(self.left_heading) if len(self.left_heading) > 0 else 1))):
-                                        left_heading_found = True
-                                        break
-
-                    # If still no match, use any non-empty cell to the left as a last resort
-                    if not left_heading_found and not best_match and col_idx > 0:
-                        for j in range(col_idx):
-                            if table_array[row_idx, j].strip():
-                                header_text = normalize_text(table_array[row_idx, j])
-                                similarity = fuzz.ratio(self.left_heading, header_text) / 100.0
-                                if similarity > best_similarity:
-                                    best_similarity = similarity
-                                    best_match = header_text
-
-                    if not best_match:
+                    error = evaluate_relation(target_pos, self.left_heading, table_data.left_heading_relations, "left heading")
+                    if error:
                         all_relationships_satisfied = False
-                        current_failed_reasons.append(f"No left heading found for cell at ({row_idx}, {col_idx})")
-                    elif best_similarity < max(0.5, 1.0 - (self.max_diffs / (len(self.left_heading) if len(self.left_heading) > 0 else 1))):
-                        all_relationships_satisfied = False
-                        current_failed_reasons.append(
-                            f"Left heading '{best_match}' doesn't match expected '{self.left_heading}' (similarity: {best_similarity:.2f})"
-                        )
+                        current_failed_reasons.append(error)
 
-                # If all relationships are satisfied for this cell, the test passes
                 if all_relationships_satisfied:
                     return True, ""
                 else:
