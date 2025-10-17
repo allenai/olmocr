@@ -6,7 +6,7 @@ run_name: qwen2.5-vl-7b-olmocrv4_1epoch_promptv4_filtering_mix0925_benchfinetune
 
 # Model configuration
 model:
-  name: /data/models/qwen2.5-vl-7b-olmocrv4_1epoch_promptv4_filtering_mix0925_preempt-8532/
+  name: /data/models/qwen2.5-vl-7b-olmocrv4_1epoch_promptv4_mix1025_more_rotation_filtered-8372
   trust_remote_code: true
   torch_dtype: bfloat16
   use_flash_attention: true
@@ -27,8 +27,8 @@ model:
 dataset:
 
   train:
-    - name: html_templates_merged_v1_rotated_10p
-      root_dir: /data/jakep/grpo_data_mixes/html_templates_merged_v1_rotated_10p/training/
+    - name: olmocr-synthmix-1025-v2-rotate10p
+      root_dir: /data/jakep/grpo_data_mixes/olmocr-synthmix-1025-v2-rotate10p/training/
       pipeline: &basic_pipeline
         - name: FrontMatterParser
           front_matter_class: PageResponse
@@ -48,8 +48,8 @@ dataset:
           end_of_message_token: "<|im_end|>"
  
   eval:
-    - name: html_templates_merged_v1_rotated_10p_eval
-      root_dir: /data/jakep/grpo_data_mixes/html_templates_merged_v1_rotated_10p/training/
+    - name: olmocr-synthmix-1025-v2-rotate10p
+      root_dir: /data/jakep/grpo_data_mixes/olmocr-synthmix-1025-v2-rotate10p/training/
       pipeline: *basic_pipeline
 
 # Training configuration
