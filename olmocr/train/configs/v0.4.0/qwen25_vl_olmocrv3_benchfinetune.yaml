@@ -55,7 +55,7 @@ dataset:
 # Training configuration
 training:
   output_dir: /weka/oe-data-default/jakep/olmocr-trainer/
-  num_train_epochs: 1
+  num_train_epochs: 3
   
   # Batch size and accumulation
   per_device_train_batch_size: 1

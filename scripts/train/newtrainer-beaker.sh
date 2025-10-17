@@ -103,7 +103,7 @@ dataset_name = dataset.rstrip('/').split('/')[-1]
 commands = [
     "pip install .[train]",
     "pip install ninja",
-    "pip install transformers==4.55.2",
+    "pip install transformers==4.52.4",
     "pip install flash-attn==2.8.0.post2 --use-pep517 --no-build-isolation",
     "pip install s5cmd",
     f"s5cmd sync s3://ai2-oe-data/jakep/olmocr/qwen2.5-vl-7b-olmocrv4_1epoch_promptv4_mix1025_more_rotation_filtered-8372/* /data/models/qwen2.5-vl-7b-olmocrv4_1epoch_promptv4_mix1025_more_rotation_filtered-8372/",
