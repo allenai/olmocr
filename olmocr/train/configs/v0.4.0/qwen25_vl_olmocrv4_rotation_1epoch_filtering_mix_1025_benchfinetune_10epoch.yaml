@@ -1,0 +1,100 @@
+# Example OlmOCR Training Configuration with Torch Compile
+
+# Project metadata
+project_name: olmocr-qwen-vl-training
+run_name: qwen2.5-vl-7b-olmocrv4_1epoch_promptv4_mix1025_more_rotation_filtered_benchfinetune_10epoch
+
+# Model configuration
+model:
+  name: /data/models/qwen2.5-vl-7b-olmocrv4_1epoch_promptv4_mix1025_more_rotation_filtered-8372
+  trust_remote_code: true
+  torch_dtype: bfloat16
+  use_flash_attention: true
+  attn_implementation: flash_attention_2
+  
+  # LoRA settings (disabled by default)
+  use_lora: false
+  # lora_rank: 8
+  # lora_alpha: 32
+  # lora_dropout: 0.1
+  # lora_target_modules:
+  #   - q_proj
+  #   - v_proj
+  #   - k_proj
+  #   - o_proj
+
+# Dataset configuration
+dataset:
+
+  train:
+    - name: olmocr-synthmix-1025-v2-rotate10p
+      root_dir: /data/jakep/grpo_data_mixes/olmocr-synthmix-1025-v2-rotate10p/training/
+      pipeline: &basic_pipeline
+        - name: FrontMatterParser
+          front_matter_class: PageResponse
+        - name: FilterOutRotatedDocuments
+        - name: ReformatLatexBoldItalic
+        - name: DatasetTextRuleFilter
+        - name: PDFRenderer
+          target_longest_image_dim: 1288
+        - name: RotationAugmentation
+          probability: 0.01
+        - name: NewYamlFinetuningPromptWithNoAnchoring
+        - name: FrontMatterOutputFormat
+        - name: InstructUserMessages
+          prompt_first: true
+        - name: Tokenizer
+          masking_index: -100
+          end_of_message_token: "<|im_end|>"
+ 
+  eval:
+    - name: olmocr-synthmix-1025-v2-rotate10p
+      root_dir: /data/jakep/grpo_data_mixes/olmocr-synthmix-1025-v2-rotate10p/training/
+      pipeline: *basic_pipeline
+
+# Training configuration
+training:
+  output_dir: /weka/oe-data-default/jakep/olmocr-trainer/
+  num_train_epochs: 10
+  
+  # Batch size and accumulation
+  per_device_train_batch_size: 1
+  per_device_eval_batch_size: 1
+  gradient_accumulation_steps: 32
+
+  gradient_checkpointing: False
+
+  collator_max_token_len: 8192
+  
+  # Learning rate
+  learning_rate: 2e-5
+  lr_scheduler_type: linear
+  warmup_ratio: 0.1
+  
+  # Optimization
+  optim: adamw_torch
+  weight_decay: 0.01
+  max_grad_norm: 1.0
+
+  # Torch compile settings
+  torch_compile: true
+  torch_compile_backend: inductor
+  torch_compile_mode: default
+  torch_compile_fullgraph: false
+  torch_compile_dynamic: false
+
+  seed: 300
+  data_seed: 301
+  
+  # Evaluation and checkpointing
+  evaluation_strategy: steps
+  eval_steps: 500
+  save_strategy: steps
+  save_steps: 500
+  save_total_limit: 5
+  load_best_model_at_end: false # Needs to be false because it has a problem restoring checkpoints for some reason
+  metric_for_best_model: eval_processed_00_documents_eval_s2pdf_loss
+  greater_is_better: false
+  
+  report_to: 
+    - wandb
