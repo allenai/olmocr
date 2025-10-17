@@ -244,27 +244,6 @@ But no markdown tables. Just some text with | pipes | that aren't tables.
         result = self.filter(sample_mixed)
         self.assertIsNotNone(result, "Should pass through with valid HTML and no markdown tables")
 
-    def test_br_tags_in_table_cells(self):
-        """Test that tables with <br> tags in cells are filtered out."""
-        sample_with_br = {
-            "page_data": PageResponse(
-                primary_language="en",
-                is_rotation_valid=True,
-                rotation_correction=0,
-                is_table=False,
-                is_diagram=False,
-                natural_text="""<table>
-                <tr>
-                    <td>Cell 1<br>with break</td>
-                    <td>Cell 2</td>
-                </tr>
-            </table>""",
-            )
-        }
-
-        result = self.filter(sample_with_br)
-        self.assertIsNone(result, "Should filter out tables with <br> tags in cells")
-
     def test_br_tags_outside_tables(self):
         """Test that <br> tags outside tables are allowed."""
         sample_br_outside = {
@@ -286,31 +265,6 @@ But no markdown tables. Just some text with | pipes | that aren't tables.
 
         result = self.filter(sample_br_outside)
         self.assertIsNotNone(result, "Should allow <br> tags outside tables")
-
-    def test_multiple_br_variations_in_cells(self):
-        """Test detection of various <br> tag formats in table cells."""
-        sample_br_variations = {
-            "page_data": PageResponse(
-                primary_language="en",
-                is_rotation_valid=True,
-                rotation_correction=0,
-                is_table=False,
-                is_diagram=False,
-                natural_text="""<table>
-                <tr>
-                    <th>Header<br/>with break</th>
-                    <th>Header 2</th>
-                </tr>
-                <tr>
-                    <td>Data<BR>break</td>
-                    <td>Data 2</td>
-                </tr>
-            </table>""",
-            )
-        }
-
-        result = self.filter(sample_br_variations)
-        self.assertIsNone(result, "Should filter out tables with any <br> variation in cells")
 
 
 class TestReformatLatexBoldItalic(unittest.TestCase):

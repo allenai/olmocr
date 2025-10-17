@@ -37,8 +37,7 @@ dependencies = [
   "boto3",
   "httpx",
   "torch>=2.7.0",
-  "transformers==4.53.2",
-  "img2pdf",
+  "transformers==4.55.2",
   "beaker-py",
 ]
 license = {file = "LICENSE"}
@@ -51,7 +50,7 @@ Changelog = "https://github.com/allenai/olmocr/blob/main/CHANGELOG.md"
 
 [project.optional-dependencies]
 gpu = [
-    "vllm==0.10.0"
+    "vllm==0.11.0"
 ]
 
 dev = [
@@ -89,6 +88,7 @@ bench = [
     "syntok",
     "openai",
     "google-genai",
+    "anthropic",
     "playwright",
     "mistralai",
     "lxml",
@@ -192,3 +192,4 @@ log_level = "DEBUG"
 markers = [
     "nonci: mark test as not intended for CI runs"
 ]
+addopts = "-m 'not nonci'"

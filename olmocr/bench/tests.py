@@ -17,6 +17,9 @@ from olmocr.repeatdetect import RepeatDetector
 
 from .katex.render import compare_rendered_equations, render_equation
 
+# Tell pytest these are not tests
+__test__ = False
+
 
 @dataclass
 class TableData:
@@ -130,7 +133,7 @@ def normalize_text(md_content: str) -> str:
     md_content = re.sub(r"\*(.*?)\*", r"\1", md_content)
     md_content = re.sub(r"_(.*?)_", r"\1", md_content)
 
-    # Convert down to a consistent unicode form, so é == e + accent, unicode forms
+    # Convert down to a consistent unicode form, so é == e + accent, unicode forms
     md_content = unicodedata.normalize("NFC", md_content)
 
     # Dictionary of characters to replace: keys are fancy characters, values are ASCII equivalents, unicode micro with greek mu comes up often enough too
@@ -633,6 +636,8 @@ class TableTest(BasePDFTest):
     top_heading: str = ""
     left_heading: str = ""
 
+    ignore_markdown_tables: bool = False
+
     def __post_init__(self):
         super().__post_init__()
         if self.type != TestType.TABLE.value:
@@ -670,8 +675,9 @@ class TableTest(BasePDFTest):
         threshold = max(0.5, threshold)
 
         # Parse tables based on content_type
-        md_tables = parse_markdown_tables(content)
-        tables_to_check.extend(md_tables)
+        if not self.ignore_markdown_tables:
+            md_tables = parse_markdown_tables(content)
+            tables_to_check.extend(md_tables)
 
         html_tables = parse_html_tables(content)
         tables_to_check.extend(html_tables)
@@ -867,7 +873,7 @@ class BaselineTest(BasePDFTest):
 
     """
 
-    max_length: Optional[int] = None # Used to implement blank page checks
+    max_length: Optional[int] = None  # Used to implement blank page checks
     max_length_skips_image_alt_tags: bool = False
 
     max_repeats: int = 30
@@ -880,7 +886,7 @@ class BaselineTest(BasePDFTest):
         if self.max_length is not None:
             if self.max_length_skips_image_alt_tags:
                 # Remove markdown image tags like ![alt text](image.png) from the text length count
-                content_for_length_check = re.sub(r'!\[.*?\]\(.*?\)', '', content)
+                content_for_length_check = re.sub(r"!\[.*?\]\(.*?\)", "", content)
                 base_content_len = len("".join(c for c in content_for_length_check if c.isalnum()).strip())
 
             if base_content_len > self.max_length:
@@ -926,6 +932,8 @@ class BaselineTest(BasePDFTest):
 class MathTest(BasePDFTest):
     math: str
 
+    ignore_dollar_delimited: bool = False
+
     def __post_init__(self):
         super().__post_init__()
         if self.type != TestType.MATH.value:
@@ -941,11 +949,17 @@ class MathTest(BasePDFTest):
     def run(self, content: str) -> Tuple[bool, str]:
         # Store both the search pattern and the full pattern to replace
         patterns = [
-            (r"\$\$(.+?)\$\$", r"\$\$(.+?)\$\$"),  # $$...$$
             (r"\\\((.+?)\\\)", r"\\\((.+?)\\\)"),  # \(...\)
             (r"\\\[(.+?)\\\]", r"\\\[(.+?)\\\]"),  # \[...\]
-            (r"\$(.+?)\$", r"\$(.+?)\$"),  # $...$
         ]
+
+        if not self.ignore_dollar_delimited:
+            patterns.extend(
+                [
+                    (r"\$\$(.+?)\$\$", r"\$\$(.+?)\$\$"),  # $$...$$
+                    (r"\$(.+?)\$", r"\$(.+?)\$"),  # $...$])
+                ]
+            )
 
         equations = []
         modified_content = content
@@ -985,13 +999,13 @@ class MathTest(BasePDFTest):
 def load_single_test(data: Union[str, Dict]) -> BasePDFTest:
     """
     Load a single test from a JSON line string or JSON object.
-    
+
     Args:
         data: Either a JSON string to parse or a dictionary containing test data.
-        
+
     Returns:
         A test object of the appropriate type.
-        
+
     Raises:
         ValidationError: If the test type is unknown or data is invalid.
         json.JSONDecodeError: If the string cannot be parsed as JSON.
@@ -1002,7 +1016,7 @@ def load_single_test(data: Union[str, Dict]) -> BasePDFTest:
         if not data:
             raise ValueError("Empty string provided")
         data = json.loads(data)
-    
+
     # Process the test data
     test_type = data.get("type")
     if test_type in {TestType.PRESENT.value, TestType.ABSENT.value}:
@@ -1017,7 +1031,7 @@ def load_single_test(data: Union[str, Dict]) -> BasePDFTest:
         test = BaselineTest(**data)
     else:
         raise ValidationError(f"Unknown test type: {test_type}")
-    
+
     return test
 
 

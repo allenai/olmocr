@@ -16,7 +16,6 @@ import argparse
 import json
 import os
 import random
-import shutil
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Optional
 
@@ -27,7 +26,10 @@ from tqdm import tqdm
 
 from olmocr.data.renderpdf import render_pdf_to_base64png
 from olmocr.filter import PdfFilter
-from olmocr.prompts import build_openai_silver_data_prompt, openai_response_format_schema
+from olmocr.prompts import (
+    build_openai_silver_data_prompt,
+    openai_response_format_schema,
+)
 from olmocr.prompts.anchor import get_anchor_text
 
 TARGET_IMAGE_DIM = 2048
@@ -82,28 +84,28 @@ def check_blank_page(pdf_path: str, page_num: int, api_key: str) -> Optional[boo
     try:
         # Render the PDF page as an image (render_pdf_to_base64png is 1-indexed)
         image_base64 = render_pdf_to_base64png(pdf_path, page_num=page_num + 1, target_longest_image_dim=TARGET_IMAGE_DIM)
-        
+
         # Get anchor text
         anchor_text = get_anchor_text(pdf_path, page_num + 1, pdf_engine="pdfreport")
 
         # Build the exact same prompt as buildsilver.py
-       
+
         response = client.chat.completions.create(
             model="gpt-4o-2024-08-06",
-            messages= [
-                    {
-                        "role": "user",
-                        "content": [
-                            {"type": "text", "text": build_openai_silver_data_prompt(anchor_text)},
-                            {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{image_base64}"}}
-                        ],
-                    }
-                ],
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": build_openai_silver_data_prompt(anchor_text)},
+                        {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{image_base64}"}},
+                    ],
+                }
+            ],
             temperature=0.1,
             max_tokens=3000,
             logprobs=True,
             top_logprobs=5,
-            response_format=openai_response_format_schema()
+            response_format=openai_response_format_schema(),
         )
 
         if not response.choices or len(response.choices) == 0:
@@ -113,13 +115,13 @@ def check_blank_page(pdf_path: str, page_num: int, api_key: str) -> Optional[boo
         # Parse the JSON response
         response_text = response.choices[0].message.content
         response_data = json.loads(response_text)
-        
+
         # Check if natural_text is null
         is_blank = response_data.get("natural_text") is None
-        
+
         if is_blank:
             print(f"Found blank page in {pdf_path} page {page_num + 1}")
-        
+
         return is_blank
 
     except Exception as e:
@@ -165,30 +167,30 @@ def process_pdf(s3_path: str, temp_dir: str, output_dir: str, api_key: str) -> b
 
         # Select a random page to check
         page_num = random.randint(0, num_pages - 1)
-        page_num = random.choice([page_num, 0]) # Bias 50% of the time to do the first page
+        page_num = random.choice([page_num, 0])  # Bias 50% of the time to do the first page
 
         # Check if the page has null natural_text
         is_blank = check_blank_page(local_pdf_path, page_num, api_key)
-        
+
         if is_blank:
             # Extract just the blank page and save it as a new PDF
             os.makedirs(output_dir, exist_ok=True)
-            
+
             # Create output filename with basename_pgnum.pdf format
             pdf_basename = os.path.splitext(pdf_filename)[0]
             output_pdf_path = os.path.join(output_dir, f"{pdf_basename}_pg{page_num+1}.pdf")
-            
+
             # Extract the single page
             writer = pypdf.PdfWriter()
             writer.add_page(reader.pages[page_num])
-            
+
             # Write the output PDF
             with open(output_pdf_path, "wb") as output_file:
                 writer.write(output_file)
-            
+
             print(f"Extracted blank page {page_num+1} from {pdf_filename} to {os.path.basename(output_pdf_path)}")
             return True
-        
+
         return False
 
     except Exception as e:
@@ -223,16 +225,16 @@ def main():
     reservoir_size = args.max_pdfs * args.reservoir_multiplier
     pdf_paths = []
     n = 0  # Total number of items seen
-    
+
     print(f"Using reservoir sampling with size {reservoir_size}")
-    
+
     with open(args.input_list, "r") as f:
         for line in f:
             n += 1
             path = line.strip()
             if not path:
                 continue
-                
+
             if len(pdf_paths) < reservoir_size:
                 pdf_paths.append(path)
             else:
@@ -240,28 +242,28 @@ def main():
                 s = random.randint(1, n)
                 if s <= reservoir_size:
                     pdf_paths[s - 1] = path
-    
+
     # Shuffle the reservoir
     random.shuffle(pdf_paths)
-    
+
     print(f"Sampled {len(pdf_paths)} PDF paths from {n} total paths")
-    
+
     blank_pdfs_found = 0
-    
+
     if args.parallel > 1:
         # Parallel processing
         print(f"Processing PDFs with {args.parallel} parallel workers")
-        
+
         with ThreadPoolExecutor(max_workers=args.parallel) as executor:
             futures = []
-            
+
             # Submit all tasks
             for s3_path in pdf_paths:
                 if blank_pdfs_found >= args.max_pdfs:
                     break
                 future = executor.submit(process_pdf, s3_path, args.temp_dir, args.output_dir, api_key)
                 futures.append(future)
-            
+
             # Process results as they complete
             with tqdm(total=min(len(pdf_paths), args.max_pdfs), desc="Processing PDFs") as pbar:
                 for future in as_completed(futures):
@@ -270,7 +272,7 @@ def main():
                         if result:
                             blank_pdfs_found += 1
                             pbar.update(1)
-                            
+
                             if blank_pdfs_found >= args.max_pdfs:
                                 print(f"Reached maximum number of blank PDFs ({args.max_pdfs}), stopping")
                                 # Cancel remaining futures
@@ -284,7 +286,7 @@ def main():
         for s3_path in tqdm(pdf_paths, desc="Processing PDFs"):
             if process_pdf(s3_path, args.temp_dir, args.output_dir, api_key):
                 blank_pdfs_found += 1
-                
+
                 if blank_pdfs_found >= args.max_pdfs:
                     print(f"Reached maximum number of blank PDFs ({args.max_pdfs}), stopping")
                     break

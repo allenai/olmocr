@@ -197,14 +197,14 @@ def create_train_dataloader(
     epoch_num: int = 0,
 ) -> DataLoader:
     """Create a training dataloader with epoch-specific shuffling.
-    
+
     Args:
         train_dataset: The training dataset
         config: Training configuration
         data_collator: Data collator for batching
         seed_worker: Worker initialization function
         epoch_num: Current epoch number for seed generation
-    
+
     Returns:
         DataLoader with epoch-specific shuffling
     """
@@ -216,7 +216,7 @@ def create_train_dataloader(
     else:
         # Use a random seed if no data_seed specified
         epoch_generator.manual_seed(int(torch.randint(0, 2**32 - 1, (1,)).item()))
-    
+
     return DataLoader(
         train_dataset,
         batch_size=config.training.per_device_train_batch_size,
@@ -499,7 +499,7 @@ def main():
             samples_to_skip = samples_seen % len(train_dataset)
             batches_to_skip = samples_to_skip // config.training.per_device_train_batch_size
             logger.info(f"Resuming training: skipping {batches_to_skip} batches ({samples_to_skip} samples) to reach position {samples_seen}")
-            
+
             # Skip batches to resume from the correct position within the epoch
             for _ in range(batches_to_skip):
                 try:
@@ -518,7 +518,7 @@ def main():
                     )
                     epoch_iterator = iter(train_dataloader)
                     break
-        
+
         # Create progress bar
         pbar = tqdm(total=max_train_samples - samples_seen, desc=f"Training from step {global_step}", unit="samples")
 
@@ -529,10 +529,10 @@ def main():
                 # End of epoch, create new dataloader with fresh shuffle
                 current_epoch = samples_seen / len(train_dataset)
                 logger.info(f"Completed epoch {current_epoch:.2f}")
-                
+
                 # Increment epoch number for new shuffle seed
                 current_epoch_num += 1
-                
+
                 # Recreate dataloader with new generator for fresh shuffle
                 train_dataloader = create_train_dataloader(
                     train_dataset,

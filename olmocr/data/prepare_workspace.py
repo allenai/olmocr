@@ -28,6 +28,15 @@ from olmocr.s3_utils import parse_s3_path
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
+# Define the metadata columns to write in front matter (in order)
+PAGE_RESPONSE_COLUMNS = [
+    "primary_language",
+    "is_rotation_valid",
+    "rotation_correction",
+    "is_table",
+    "is_diagram",
+]
+
 
 def fetch_s3_file(s3_url: str, local_path: str) -> str:
     """Download a file from an S3 URI (s3://bucket/key) to local_path."""
@@ -93,7 +102,19 @@ def parse_jsonl_entry(entry: Dict) -> Optional[Dict]:
             logger.warning(f"Entry for {source_file} missing pdf_page_numbers")
             return None
 
-        return {"id": entry.get("id", ""), "text": text, "source_file": source_file, "metadata": metadata, "pdf_page_numbers": pdf_page_numbers}
+        # Extract PAGE_RESPONSE_COLUMNS data from attributes
+        page_response_data = {}
+        for column in PAGE_RESPONSE_COLUMNS:
+            page_response_data[column] = attributes.get(column, [])
+
+        return {
+            "id": entry.get("id", ""),
+            "text": text,
+            "source_file": source_file,
+            "metadata": metadata,
+            "pdf_page_numbers": pdf_page_numbers,
+            "page_response_data": page_response_data,
+        }
     except Exception as e:
         logger.error(f"Error parsing JSONL entry: {e}")
         return None
@@ -169,6 +190,7 @@ def process_document(entry_data: Dict, output_dir: Path, cache_dir: Path) -> Tup
     doc_id = entry_data["id"]
     full_text = entry_data["text"]
     pdf_page_numbers = entry_data["pdf_page_numbers"]
+    page_response_data = entry_data.get("page_response_data", {})
 
     # Extract page texts
     page_texts = extract_page_text(full_text, pdf_page_numbers)
@@ -201,9 +223,17 @@ def process_document(entry_data: Dict, output_dir: Path, cache_dir: Path) -> Tup
 
     doc_dir.mkdir(parents=True, exist_ok=True)
 
+    # Create a mapping from page numbers to their indices
+    page_num_to_index = {}
+    for idx, (_, _, page_num) in enumerate(pdf_page_numbers):
+        page_num_to_index[page_num] = idx
+
     # Process each page
     for page_num, page_text in page_texts.items():
         try:
+            # Get the index for this page number
+            page_index = page_num_to_index.get(page_num)
+
             # Create filenames
             base_name = f"{doc_id}_page{page_num}"
             md_path = doc_dir / f"{base_name}.md"
@@ -213,16 +243,40 @@ def process_document(entry_data: Dict, output_dir: Path, cache_dir: Path) -> Tup
             with open(md_path, "w", encoding="utf-8") as f:
                 # Write YAML front matter
                 f.write("---\n")
-                f.write(f"page_number: {page_num}\n")
-                f.write(f"source_file: {source_file}\n")
-                f.write(f"document_id: {doc_id}\n")
-                for k, v in entry_data["metadata"].items():
-                    if k != "Source-File":  # Already included as source_file
-                        f.write(f"{k}: {v}\n")
-                f.write("---\n\n")
 
-                # Write page text
-                f.write(page_text)
+                # Write PAGE_RESPONSE_COLUMNS fields in order
+                for column in PAGE_RESPONSE_COLUMNS:
+                    # Get the value for this page from the attributes lists
+                    column_values = page_response_data.get(column, [])
+
+                    if page_index is not None and page_index < len(column_values):
+                        value = column_values[page_index]
+                        # Convert None to null for YAML
+                        if value is None:
+                            f.write(f"{column}: null\n")
+                        else:
+                            f.write(f"{column}: {value}\n")
+                    else:
+                        # Write default values for missing fields
+                        if column == "primary_language":
+                            f.write(f"{column}: null\n")
+                        elif column == "is_rotation_valid":
+                            f.write(f"{column}: true\n")
+                        elif column == "rotation_correction":
+                            f.write(f"{column}: 0\n")
+                        elif column == "is_table":
+                            f.write(f"{column}: false\n")
+                        elif column == "is_diagram":
+                            f.write(f"{column}: false\n")
+
+                # Handle closing delimiter based on whether text exists
+                if page_text is not None and len(page_text.strip()) > 0:
+                    f.write("---\n")
+                    # Write page text
+                    f.write(page_text)
+                else:
+                    # No text or empty text - close without newline
+                    f.write("---")
 
             # Extract PDF page
             if extract_pdf_page(local_pdf_path, page_num, str(pdf_path)):

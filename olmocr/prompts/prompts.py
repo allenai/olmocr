@@ -160,6 +160,7 @@ def build_no_anchoring_yaml_prompt() -> str:
         "Return your output as markdown, with a front matter section on top specifying values for the primary_language, is_rotation_valid, rotation_correction, is_table, and is_diagram parameters."
     )
 
+
 def build_no_anchoring_v4_yaml_prompt() -> str:
     return (
         "Attached is one page of a document that you must process. "

@@ -1,17 +1,23 @@
+import random
 import unittest
-import re
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
+
 from bs4 import BeautifulSoup
 
 from olmocr.bench.synth.mine_html_templates import (
+    PreserveTablesConverter,
+    extract_html_metadata,
     generate_tests_from_html,
     html_to_markdown_with_frontmatter,
-    extract_html_metadata,
-    PreserveTablesConverter
 )
 from olmocr.bench.tests import TestType
 
+
 class TestMineTests(unittest.TestCase):
+    def setUp(self):
+        self.random_generator = random.Random(42)
+        return super().setUp()
+
     def test_absent_nested(self):
         html_content = """
 <!DOCTYPE html>
@@ -48,7 +54,7 @@ class TestMineTests(unittest.TestCase):
     </footer>
 </body>
 """
-        tests = generate_tests_from_html(html_content, "0", 1)
+        tests = generate_tests_from_html(html_content, "0", 1, self.random_generator)
 
         self.assertEqual(len([test for test in tests if test["type"] == "absent"]), 2)
 
@@ -77,7 +83,7 @@ class TestMineTests(unittest.TestCase):
 </body>
 </html>"""
 
-        tests = generate_tests_from_html(html_content, "0", 1)
+        tests = generate_tests_from_html(html_content, "0", 1, self.random_generator)
         self.assertGreater(len(tests), 5)
 
     def test_big_headers(self):
@@ -232,7 +238,7 @@ class TestMineTests(unittest.TestCase):
 </body>
 </html>"""
 
-        tests = generate_tests_from_html(html_content, "0", 1)
+        tests = generate_tests_from_html(html_content, "0", 1, self.random_generator)
 
         self.assertFalse(any(test for test in tests if test["type"] == "absent" and "Comparative data" in test["text"]))
 
@@ -270,7 +276,7 @@ class TestMineTests(unittest.TestCase):
 </body>
 </html>"""
 
-        tests = generate_tests_from_html(html_content, "0", 1)
+        tests = generate_tests_from_html(html_content, "0", 1, self.random_generator)
 
         self.assertEqual(len([test for test in tests if test["type"] == "absent"]), 1)
 
@@ -374,7 +380,7 @@ class TestMineTests(unittest.TestCase):
 </body>
 </html>"""
 
-        tests = generate_tests_from_html(html_content, "0", 1)
+        tests = generate_tests_from_html(html_content, "0", 1, self.random_generator)
 
         self.assertEqual(len([test for test in tests if test["type"] == "absent"]), 4)
 
@@ -763,7 +769,7 @@ class TestMineTests(unittest.TestCase):
 </body>
 </html>"""
 
-        tests = generate_tests_from_html(html_content, "0", 1)
+        tests = generate_tests_from_html(html_content, "0", 1, self.random_generator)
 
         self.assertTrue(len(tests) > 10)
 
@@ -857,7 +863,7 @@ class TestMineTests(unittest.TestCase):
 </body>
 </html>"""
 
-        tests = generate_tests_from_html(html_content, "0", 1)
+        tests = generate_tests_from_html(html_content, "0", 1, self.random_generator)
 
         superscript_map = {
             "0": "⁰",
@@ -1026,7 +1032,7 @@ class TestMineTests(unittest.TestCase):
 </body>
 </html>"""
 
-        tests = generate_tests_from_html(html_content, "0", 1)
+        tests = generate_tests_from_html(html_content, "0", 1, self.random_generator)
 
         for test in tests:
             if test["type"] == "order":
@@ -1035,7 +1041,11 @@ class TestMineTests(unittest.TestCase):
 
 class TestMathExtraction(unittest.TestCase):
     """Test the math extraction functionality in mine_html_templates.py"""
-    
+
+    def setUp(self):
+        self.random_generator = random.Random(42)
+        return super().setUp()
+
     def test_math_extraction_from_html(self):
         """Test that math equations are properly extracted from HTML content"""
         html_content = """
@@ -1048,16 +1058,16 @@ class TestMathExtraction(unittest.TestCase):
         </body>
         </html>
         """
-        
+
         # Generate tests from HTML
-        tests = generate_tests_from_html(html_content, "test_pdf", 1)
-        
+        tests = generate_tests_from_html(html_content, "test_pdf", 1, self.random_generator)
+
         # Filter math tests
         math_tests = [t for t in tests if t.get("type") == "math"]
-        
+
         # Check that we extracted math equations
         self.assertTrue(len(math_tests) > 0, "Should extract at least one math equation")
-        
+
         # Check that specific equations were extracted
         math_contents = [t["math"] for t in math_tests]
         self.assertIn("x = 2", math_contents)
@@ -1079,20 +1089,20 @@ class TestMathExtraction(unittest.TestCase):
         </body>
         </html>
         """
-        
-        tests = generate_tests_from_html(html_content, "test_pdf", 1)
+
+        tests = generate_tests_from_html(html_content, "test_pdf", 1, self.random_generator)
         math_tests = [t for t in tests if t.get("type") == "math"]
-        
+
         # Check multiline equation is captured
         self.assertTrue(len(math_tests) > 0)
-        
+
         # Check that the multiline content is preserved (without excessive newlines)
         found_multiline = False
         for test in math_tests:
             if "\\frac{e_i + \\varphi(e_i)}{2}" in test["math"] and "\\mathbb{N}" in test["math"]:
                 found_multiline = True
                 break
-        
+
         self.assertTrue(found_multiline, "Should extract multiline equation correctly")
 
     def test_math_extraction_deduplication(self):
@@ -1106,13 +1116,13 @@ class TestMathExtraction(unittest.TestCase):
         </body>
         </html>
         """
-        
-        tests = generate_tests_from_html(html_content, "test_pdf", 1)
+
+        tests = generate_tests_from_html(html_content, "test_pdf", 1, self.random_generator)
         math_tests = [t for t in tests if t.get("type") == "math"]
-        
+
         # Count how many times the equation appears
         equation_count = sum(1 for t in math_tests if "x^2 + y^2 = z^2" in t["math"])
-        
+
         # Should only appear once due to deduplication
         self.assertEqual(equation_count, 1, "Duplicate equations should be deduplicated")
 
@@ -1127,12 +1137,12 @@ class TestMathExtraction(unittest.TestCase):
         </body>
         </html>
         """
-        
-        tests = generate_tests_from_html(html_content, "test_pdf", 1)
+
+        tests = generate_tests_from_html(html_content, "test_pdf", 1, self.random_generator)
         math_tests = [t for t in tests if t.get("type") == "math"]
-        
+
         math_contents = [t["math"] for t in math_tests]
-        
+
         # Check all patterns are captured
         self.assertIn("inline1", math_contents)
         self.assertIn("display1", math_contents)
@@ -1149,12 +1159,12 @@ class TestMathExtraction(unittest.TestCase):
         </body>
         </html>
         """
-        
-        tests = generate_tests_from_html(html_content, "test_pdf", 1)
+
+        tests = generate_tests_from_html(html_content, "test_pdf", 1, self.random_generator)
         math_tests = [t for t in tests if t.get("type") == "math"]
-        
+
         math_contents = [t["math"] for t in math_tests]
-        
+
         # Short equations (length <= 2) should be filtered out
         self.assertNotIn("x", math_contents)
         self.assertNotIn("y", math_contents)
@@ -1170,16 +1180,16 @@ class TestMathExtraction(unittest.TestCase):
         </body>
         </html>
         """
-        
+
         # Mock the validation to always pass for math tests
-        with patch('olmocr.bench.synth.mine_html_templates.load_single_test') as mock_load:
+        with patch("olmocr.bench.tests.load_single_test") as mock_load:
             mock_test = MagicMock()
             mock_test.run.return_value = (True, None)
             mock_load.return_value = mock_test
-            
-            tests = generate_tests_from_html(html_content, "test_pdf", 1)
+
+            tests = generate_tests_from_html(html_content, "test_pdf", 1, self.random_generator)
             math_tests = [t for t in tests if t.get("type") == "math"]
-            
+
             # Verify math test was created
             self.assertTrue(len(math_tests) > 0)
             # Verify test has correct structure
@@ -1195,7 +1205,7 @@ class TestMathExtraction(unittest.TestCase):
         """Test with the complex markdown example provided by the user"""
         # Convert markdown to HTML-like structure for testing
         html_content = '<!DOCTYPE html>\n<html lang="en">\n<head>\n    <meta charset="UTF-8">\n    <meta name="viewport" content="width=device-width, initial-scale=1.0">\n    <title>Automorphisms of Order Two</title>\n    <script src="https://polyfill.io/v3/polyfill.min.js?features=es6"></script>\n    <script id="MathJax-script" async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>\n    <script>\n        window.MathJax = {\n            tex: {\n                inlineMath: [[\'\\\\(\', \'\\\\)\']],\n                displayMath: [[\'\\\\[\', \'\\\\]\']]\n            }\n        };\n    </script>\n    <style>\n        body {\n            font-family: "Times New Roman", serif;\n            font-size: 11pt;\n            line-height: 1.4;\n            max-width: 791px;\n            margin: 0 auto;\n            padding: 20px;\n            background-color: white;\n        }\n        \n        .math-block {\n            margin: 15px 0;\n        }\n        \n        .definition {\n            margin: 20px 0;\n        }\n        \n        .definition-header {\n            font-weight: bold;\n            margin-bottom: 10px;\n        }\n        \n        .lemma {\n            margin: 20px 0;\n        }\n        \n        .lemma-header {\n            font-weight: bold;\n            margin-bottom: 10px;\n        }\n        \n        .proof {\n            margin: 15px 0;\n        }\n        \n        .proof-header {\n            font-weight: bold;\n            display: inline;\n        }\n        \n        .qed {\n            float: right;\n            font-weight: bold;\n        }\n        \n        ul {\n            margin: 15px 0;\n            padding-left: 20px;\n        }\n        \n        ol {\n            margin: 15px 0;\n            padding-left: 20px;\n        }\n        \n        h2 {\n            font-size: 14pt;\n            font-weight: bold;\n            margin: 25px 0 15px 0;\n        }\n        \n        .equation {\n            text-align: right;\n            margin: 15px 0;\n        }\n        \n        footer {\n            text-align: center;\n            margin-top: 30px;\n            font-weight: bold;\n        }\n    </style>\n</head>\n<body>\n    <div class="math-block">\n        <p>If \\(\\varphi \\in \\text{Aut}(E)\\) with \\(\\varphi^2 = id\\) we observe that</p>\n        \\[e_i = \\frac{e_i + \\varphi(e_i)}{2} + \\frac{e_i - \\varphi(e_i)}{2}, \\quad \\text{for } i \\in \\mathbb{N}.\\]\n        \n        <p>Setting \\(a_i = e_i + \\varphi(e_i)/2\\) we have:</p>\n        \n        <ul>\n            <li>\\(\\varphi(e_i) = -e_i + 2a_i\\),</li>\n            <li>\\(\\varphi(a_i) = a_i\\), that is, \\(a_i\\) is of degree zero in the \\(\\mathbb{Z}_2\\)-grading \\(E_\\varphi\\),</li>\n            <li>\\(\\varphi(e_i - a_i) = -(e_i - a_i)\\), that is, \\(e_i - a_i\\) is of degree 1 in the \\(\\mathbb{Z}_2\\)-grading \\(E_\\varphi\\).</li>\n        </ul>\n    </div>\n    \n    <div class="definition">\n        <div class="definition-header">Definition 5</div>\n        <p>Let \\(\\varphi \\in \\text{Aut}(E)\\). We say that \\(\\varphi\\) is of <em>canonical type</em> if \\(\\varphi(e_i) \\in E_{(1)}\\) for all \\(i\\).</p>\n        \n        <p>If \\(\\varphi\\) is an automorphism of order 2 on \\(E\\), we have that \\(\\varphi\\) is of canonical type if and only if \\(a_i \\in E_{(1)}\\) for all \\(i\\). Let us fix a basis \\(\\beta = \\{e_1, e_2, \\ldots, e_n, \\ldots\\}\\) of the vector space \\(L\\) and an automorphism \\(\\varphi \\in \\text{Aut}(E)\\) such that \\(\\varphi^2 = id\\). Then \\(\\varphi\\), as a linear transformation, has eigenvalues \\(\\pm 1\\) and \\(-1\\) only, and moreover, there exists a basis of the vector space \\(E\\) consisting of eigenvectors. (It is well known from elementary Linear Algebra that this fact does not depend on the dimension of the vector space as long as the characteristic of \\(F\\) is different from 2.) Then \\(E = E(1) \\oplus E(-1)\\) where \\(E(t)\\) is the eigenspace for the eigenvalue \\(t\\) of the linear transformation \\(\\varphi\\). One considers the intersections \\(L(t) = L \\cap E(t)\\), \\(t = \\pm 1\\). Changing the basis \\(\\beta\\), if necessary, one may assume that \\(L(t)\\) is the span of \\(\\beta \\cap L(t)\\). Clearly this change of basis gives rise to a homogeneous automorphism of \\(E\\) and we can take the composition of it and then \\(\\varphi\\). We shall assume that such a change of basis has been done.</p>\n        \n        <p>Denote</p>\n        \\[I_\\varphi = \\{n \\in \\mathbb{N} \\mid \\varphi(e_n) = \\pm e_n\\}.\\]\n    </div>\n    \n    <p>We shall distinguish the following four possibilities:</p>\n    \n    <ol>\n        <li>\\(I_\\varphi = \\mathbb{N}\\).</li>\n        <li>\\(I_\\varphi \\neq \\mathbb{N}\\) is infinite.</li>\n        <li>\\(I_\\varphi\\) is finite and nonempty.</li>\n        <li>\\(I_\\gamma = \\emptyset\\) for every linear basis \\(\\gamma\\) of \\(L\\).</li>\n    </ol>\n    \n    <p>We shall call these automorphisms (and also the corresponding \\(\\mathbb{Z}_2\\)-gradings), automorphisms (or gradings) of type 1, 2, 3, and 4, respectively.</p>\n    \n    <p>The automorphisms of type 1 induce \\(\\mathbb{Z}_2\\)-gradings on \\(E\\) in which all generators of \\(E\\) are homogeneous. Such structures are called homogeneous \\(\\mathbb{Z}_2\\)-gradings on \\(E\\). The corresponding graded identities were completely studied in [22, 24, 29].</p>\n    \n    <p>We conclude this section with the following lemma.</p>\n    \n    <div class="lemma">\n        <div class="lemma-header">Lemma 6</div>\n        <p>Let \\(\\varphi\\) be an automorphism of order two of \\(E\\). Then \\(\\varphi\\) is of type 4 if and only if, for every \\(v \\in L\\) such that \\(\\varphi(v) = \\pm v\\), one has \\(v = 0\\).</p>\n        \n        <div class="proof">\n            <span class="proof-header">Proof</span> Assume that \\(\\varphi\\) is of type 4 and let \\(v \\in L\\) with \\(\\varphi(v) = \\pm v\\). If \\(v \\neq 0\\), choose a basis \\(\\gamma\\) of \\(L\\) such that \\(v \\in \\gamma\\). Then \\(I_\\gamma \\neq \\emptyset\\), a contradiction. The converse follows by the same argument.\n            <span class="qed">■</span>\n        </div>\n    </div>\n    \n    <h2>3 &nbsp;&nbsp; Automorphisms of order two of <em>E</em></h2>\n    \n    <p>From this point on, our goal is to survey recent developments regarding automorphisms of order two and the corresponding \\(\\mathbb{Z}_2\\)-gradings of the infinite-dimensional Grassmann algebra.</p>\n    \n    <p>Let \\(X = \\{e_1, \\ldots, e_n, \\ldots\\}\\). For each map \\(\\lambda : X \\to E\\), we can define the linear transformation \\(\\varphi : E \\to E\\) by</p>\n    \n    <div class="equation">\n        \\[\\varphi(e_{i_1} \\cdots e_{i_n}) = \\lambda(e_{i_1}) \\cdots \\lambda(e_{i_n}),\\] <span style="float: right;">(1)</span>\n    </div>\n    \n    <p>for all \\(n \\in \\mathbb{N}\\).</p>\n    \n    <p>We start with the next lemma.</p>\n    \n    <div class="lemma">\n        <div class="lemma-header">Lemma 7</div>\n        <p><em>The linear transformation</em> \\(\\varphi\\) <em>is an endomorphism of</em> \\(E\\) <em>if and only if</em></p>\n        \\[\\lambda(e_i)\\lambda(e_j) + \\lambda(e_j)\\lambda(e_i) = 0, \\quad \\text{for all } i, j.\\]\n    </div>\n    \n    <footer>\n        4\n    </footer>\n</body>\n</html>'
-        tests = generate_tests_from_html(html_content, "test_pdf", 1)
+        tests = generate_tests_from_html(html_content, "test_pdf", 1, self.random_generator)
         math_tests = [t for t in tests if t.get("type") == "math"]
 
         for test in math_tests:
@@ -1212,10 +1222,10 @@ class TestMathExtraction(unittest.TestCase):
         </body>
         </html>
         """
-        
-        tests = generate_tests_from_html(html_content, "test_pdf", 1)
+
+        tests = generate_tests_from_html(html_content, "test_pdf", 1, self.random_generator)
         math_tests = [t for t in tests if t.get("type") == "math"]
-        
+
         self.assertTrue(len(math_tests) > 0)
         # The equation should be stripped of leading/trailing whitespace
         self.assertEqual(math_tests[0]["math"].strip(), math_tests[0]["math"])
@@ -1238,21 +1248,21 @@ class TestExtractHtmlMetadata(unittest.TestCase):
         </body>
         </html>
         """
-        
+
         metadata = extract_html_metadata(html_content)
-        
+
         # Check language extraction
-        self.assertEqual(metadata['primary_language'], 'pt')
-        
+        self.assertEqual(metadata["primary_language"], "pt")
+
         # Check rotation values (always fixed)
-        self.assertTrue(metadata['is_rotation_valid'])
-        self.assertEqual(metadata['rotation_correction'], 0)
-        
+        self.assertTrue(metadata["is_rotation_valid"])
+        self.assertEqual(metadata["rotation_correction"], 0)
+
         # Check table/diagram detection
         # With 1 image (500 chars) and small text content, image ratio > 50%
-        self.assertFalse(metadata['is_table'])
-        self.assertTrue(metadata['is_diagram'])  # Image estimate dominates
-    
+        self.assertFalse(metadata["is_table"])
+        self.assertTrue(metadata["is_diagram"])  # Image estimate dominates
+
     def test_extract_metadata_table_heavy_document(self):
         """Test metadata extraction from a document that is mostly tables."""
         html_content = """
@@ -1271,13 +1281,13 @@ class TestExtractHtmlMetadata(unittest.TestCase):
         </body>
         </html>
         """
-        
+
         metadata = extract_html_metadata(html_content)
-        
-        self.assertEqual(metadata['primary_language'], 'en')
-        self.assertTrue(metadata['is_table'])  # Should be True as >50% is table
-        self.assertFalse(metadata['is_diagram'])
-    
+
+        self.assertEqual(metadata["primary_language"], "en")
+        self.assertTrue(metadata["is_table"])  # Should be True as >50% is table
+        self.assertFalse(metadata["is_diagram"])
+
     def test_extract_metadata_image_heavy_document(self):
         """Test metadata extraction from a document that is mostly images."""
         html_content = """
@@ -1292,13 +1302,13 @@ class TestExtractHtmlMetadata(unittest.TestCase):
         </body>
         </html>
         """
-        
+
         metadata = extract_html_metadata(html_content)
-        
-        self.assertEqual(metadata['primary_language'], 'es')
-        self.assertFalse(metadata['is_table'])
-        self.assertTrue(metadata['is_diagram'])  # Should be True as >50% is images
-    
+
+        self.assertEqual(metadata["primary_language"], "es")
+        self.assertFalse(metadata["is_table"])
+        self.assertTrue(metadata["is_diagram"])  # Should be True as >50% is images
+
     def test_extract_metadata_language_with_region(self):
         """Test that language codes with regions (e.g., pt-BR) are shortened."""
         html_content = """
@@ -1308,12 +1318,12 @@ class TestExtractHtmlMetadata(unittest.TestCase):
         </body>
         </html>
         """
-        
+
         metadata = extract_html_metadata(html_content)
-        
+
         # Should convert pt-BR to pt
-        self.assertEqual(metadata['primary_language'], 'pt')
-    
+        self.assertEqual(metadata["primary_language"], "pt")
+
     def test_extract_metadata_no_html_tag(self):
         """Test extraction when there's no html tag (defaults to 'en')."""
         html_content = """
@@ -1321,11 +1331,11 @@ class TestExtractHtmlMetadata(unittest.TestCase):
             <p>Content without html tag</p>
         </body>
         """
-        
+
         metadata = extract_html_metadata(html_content)
-        
-        self.assertEqual(metadata['primary_language'], 'en')  # Should default to 'en'
-    
+
+        self.assertEqual(metadata["primary_language"], "en")  # Should default to 'en'
+
     def test_extract_metadata_mixed_content(self):
         """Test a document with mixed content types."""
         html_content = """<!DOCTYPE html>
@@ -1586,13 +1596,13 @@ class TestExtractHtmlMetadata(unittest.TestCase):
                 </body>
                 </html>
         """
-        
+
         metadata = extract_html_metadata(html_content)
-        
-        self.assertEqual(metadata['primary_language'], 'pt')
-        self.assertTrue(metadata['is_table'])
-        self.assertFalse(metadata['is_diagram']) 
-    
+
+        self.assertEqual(metadata["primary_language"], "pt")
+        self.assertTrue(metadata["is_table"])
+        self.assertFalse(metadata["is_diagram"])
+
     def test_extract_metadata_empty_body(self):
         """Test extraction with empty or minimal content."""
         html_content = """
@@ -1600,14 +1610,14 @@ class TestExtractHtmlMetadata(unittest.TestCase):
         <body></body>
         </html>
         """
-        
+
         metadata = extract_html_metadata(html_content)
-        
-        self.assertEqual(metadata['primary_language'], 'de')
-        self.assertFalse(metadata['is_table'])
-        self.assertFalse(metadata['is_diagram'])
-        self.assertTrue(metadata['is_rotation_valid'])
-        self.assertEqual(metadata['rotation_correction'], 0)
+
+        self.assertEqual(metadata["primary_language"], "de")
+        self.assertFalse(metadata["is_table"])
+        self.assertFalse(metadata["is_diagram"])
+        self.assertTrue(metadata["is_rotation_valid"])
+        self.assertEqual(metadata["rotation_correction"], 0)
 
 
 class TestHtmlToMarkdown(unittest.TestCase):
@@ -1625,19 +1635,19 @@ class TestHtmlToMarkdown(unittest.TestCase):
         </body>
         </html>
         """
-        
+
         markdown_with_frontmatter = html_to_markdown_with_frontmatter(html_content)
-        
+
         # Check that the title from head tag is NOT in the markdown
         self.assertNotIn("This Should Not Appear In Markdown", markdown_with_frontmatter)
-        
+
         # Check that body content IS in the markdown
         self.assertIn("Main Heading", markdown_with_frontmatter)
         self.assertIn("This is the body content that should appear", markdown_with_frontmatter)
-        
+
         # Check that frontmatter is present
         self.assertTrue(markdown_with_frontmatter.startswith("---"))
-    
+
     def test_image_with_data_description(self):
         """Test that images are converted with placeholder alt text."""
         html_content = """
@@ -1649,16 +1659,16 @@ class TestHtmlToMarkdown(unittest.TestCase):
         </body>
         </html>
         """
-        
+
         markdown_with_frontmatter = html_to_markdown_with_frontmatter(html_content)
-        
+
         # Check that images use the fixed placeholder alt text
         self.assertIn("![Image Placeholder]", markdown_with_frontmatter)
-        
+
         # Check that other content is preserved
         self.assertIn("Text before image", markdown_with_frontmatter)
         self.assertIn("Text after image", markdown_with_frontmatter)
-    
+
     def test_image_without_data_description(self):
         """Test that images without data-description use default alt text."""
         html_content = """
@@ -1668,12 +1678,12 @@ class TestHtmlToMarkdown(unittest.TestCase):
         </body>
         </html>
         """
-        
+
         markdown_with_frontmatter = html_to_markdown_with_frontmatter(html_content)
-        
+
         # Check that default alt text is used
         self.assertIn("![Image Placeholder]", markdown_with_frontmatter)
-    
+
     def test_headers_footers_excluded(self):
         """Test that header and footer tags are excluded from markdown."""
         html_content = """
@@ -1692,17 +1702,17 @@ class TestHtmlToMarkdown(unittest.TestCase):
         </body>
         </html>
         """
-        
+
         markdown_with_frontmatter = html_to_markdown_with_frontmatter(html_content)
-        
+
         # Check that header/footer content is excluded
         self.assertNotIn("Navigation menu", markdown_with_frontmatter)
         self.assertNotIn("Footer text", markdown_with_frontmatter)
-        
+
         # Check that main content is included
         self.assertIn("Main Content", markdown_with_frontmatter)
         self.assertIn("This should appear in the markdown", markdown_with_frontmatter)
-    
+
     def test_no_body_tag_fallback(self):
         """Test that content is still processed when there's no body tag."""
         html_content = """
@@ -1711,13 +1721,13 @@ class TestHtmlToMarkdown(unittest.TestCase):
             <p>This should still be converted.</p>
         </div>
         """
-        
+
         markdown_with_frontmatter = html_to_markdown_with_frontmatter(html_content)
-        
+
         # Check that content is still converted
         self.assertIn("Content without body tag", markdown_with_frontmatter)
         self.assertIn("This should still be converted", markdown_with_frontmatter)
-    
+
     def test_removes_triple_dashes_from_content(self):
         """Test that --- at the start or end of markdown content is removed."""
         # Test with --- at the beginning
@@ -1729,17 +1739,17 @@ class TestHtmlToMarkdown(unittest.TestCase):
         </body>
         </html>
         """
-        
+
         markdown_start = html_to_markdown_with_frontmatter(html_content_start)
-        lines = markdown_start.split('\n')
-        
+        lines = markdown_start.split("\n")
+
         # Check that we have FrontMatter
-        self.assertEqual(lines[0], '---')
+        self.assertEqual(lines[0], "---")
         # Check that the content doesn't start with --- after the FrontMatter ends
-        frontmatter_end = next(i for i in range(1, len(lines)) if lines[i] == '---')
-        content_after_frontmatter = '\n'.join(lines[frontmatter_end + 1:])
-        self.assertFalse(content_after_frontmatter.strip().startswith('---'))
-        
+        frontmatter_end = next(i for i in range(1, len(lines)) if lines[i] == "---")
+        content_after_frontmatter = "\n".join(lines[frontmatter_end + 1 :])
+        self.assertFalse(content_after_frontmatter.strip().startswith("---"))
+
         # Test with --- at the end
         html_content_end = """
         <html lang="en">
@@ -1749,11 +1759,11 @@ class TestHtmlToMarkdown(unittest.TestCase):
         </body>
         </html>
         """
-        
+
         markdown_end = html_to_markdown_with_frontmatter(html_content_end)
         # Check that content doesn't end with ---
-        self.assertFalse(markdown_end.rstrip().endswith('---\n---'))
-        
+        self.assertFalse(markdown_end.rstrip().endswith("---\n---"))
+
         # Test with --- at both beginning and end
         html_content_both = """
         <html lang="en">
@@ -1764,22 +1774,22 @@ class TestHtmlToMarkdown(unittest.TestCase):
         </body>
         </html>
         """
-        
+
         markdown_both = html_to_markdown_with_frontmatter(html_content_both)
-        lines_both = markdown_both.split('\n')
-        frontmatter_end_both = next(i for i in range(1, len(lines_both)) if lines_both[i] == '---')
-        content_both = '\n'.join(lines_both[frontmatter_end_both + 1:])
-        
+        lines_both = markdown_both.split("\n")
+        frontmatter_end_both = next(i for i in range(1, len(lines_both)) if lines_both[i] == "---")
+        content_both = "\n".join(lines_both[frontmatter_end_both + 1 :])
+
         # Content should not start or end with ---
-        self.assertFalse(content_both.strip().startswith('---'))
-        self.assertFalse(content_both.strip().endswith('---'))
+        self.assertFalse(content_both.strip().startswith("---"))
+        self.assertFalse(content_both.strip().endswith("---"))
         # But should contain "Middle content"
         self.assertIn("Middle content", content_both)
 
 
 class TestSuperscriptSubscriptConversion(unittest.TestCase):
     """Test superscript and subscript conversion to Unicode in html_to_markdown_with_frontmatter"""
-    
+
     def test_basic_superscripts(self):
         """Test basic superscript conversion"""
         html = """
@@ -1791,17 +1801,17 @@ class TestSuperscriptSubscriptConversion(unittest.TestCase):
         </html>
         """
         result = html_to_markdown_with_frontmatter(html)
-        
+
         # Check that superscripts are converted to Unicode
         self.assertIn("x²", result)
         self.assertIn("y³", result)
         self.assertIn("z⁴", result)
         self.assertIn("10⁹", result)
-        
+
         # Should not contain HTML sup tags in markdown
         self.assertNotIn("<sup>", result)
         self.assertNotIn("</sup>", result)
-    
+
     def test_basic_subscripts(self):
         """Test basic subscript conversion"""
         html = """
@@ -1814,16 +1824,16 @@ class TestSuperscriptSubscriptConversion(unittest.TestCase):
         </html>
         """
         result = html_to_markdown_with_frontmatter(html)
-        
+
         # Check that subscripts are converted to Unicode
         self.assertIn("H₂O", result)
         self.assertIn("CO₂", result)
         self.assertIn("Xₙ", result)
-        
+
         # Should not contain HTML sub tags in markdown
         self.assertNotIn("<sub>", result)
         self.assertNotIn("</sub>", result)
-    
+
     def test_mixed_super_and_subscripts(self):
         """Test mixed superscripts and subscripts"""
         html = """
@@ -1835,13 +1845,13 @@ class TestSuperscriptSubscriptConversion(unittest.TestCase):
         </html>
         """
         result = html_to_markdown_with_frontmatter(html)
-        
+
         # Check mixed conversions
         self.assertIn("x²", result)
         self.assertIn("H₂O⁺", result)
         self.assertIn("Ca²⁺", result)
         self.assertIn("SO₄²⁻", result)
-    
+
     def test_special_characters(self):
         """Test special character conversions"""
         html = """
@@ -1854,7 +1864,7 @@ class TestSuperscriptSubscriptConversion(unittest.TestCase):
         </html>
         """
         result = html_to_markdown_with_frontmatter(html)
-        
+
         # Check special character conversions
         self.assertIn("(x+y)ⁿ", result)
         self.assertIn("f₍ₓ₎", result)
@@ -1863,7 +1873,7 @@ class TestSuperscriptSubscriptConversion(unittest.TestCase):
         # subscript i might not be in map, so check either form
         self.assertTrue("aᵢ" in result or "a<sub>i</sub>" in result or "ai" in result)
         self.assertIn("bⁱ", result)
-    
+
     def test_in_table(self):
         """Test superscripts/subscripts within HTML tables"""
         html = """
@@ -1887,14 +1897,14 @@ class TestSuperscriptSubscriptConversion(unittest.TestCase):
         </html>
         """
         result = html_to_markdown_with_frontmatter(html)
-        
+
         # Tables should be preserved as HTML but superscripts/subscripts should still be converted
         self.assertIn("<table>", result)
-        
+
         # Check if conversions happened in table cells
         self.assertTrue("H₂O" in result or "<sub>2</sub>" in result)
         self.assertTrue("SO₄²⁻" in result or "<sub>4</sub><sup>2-</sup>" in result)
-    
+
     def test_nested_elements(self):
         """Test superscripts/subscripts in nested HTML elements"""
         html = """
@@ -1911,12 +1921,12 @@ class TestSuperscriptSubscriptConversion(unittest.TestCase):
         </html>
         """
         result = html_to_markdown_with_frontmatter(html)
-        
+
         # Check conversions in nested structures
         self.assertIn("mc²", result)
         self.assertTrue("x¹" in result or "x1" in result)
         self.assertTrue("x₂" in result or "x2" in result)
-    
+
     def test_frontmatter_preserved(self):
         """Test that frontmatter is still generated correctly"""
         html = """
@@ -1928,15 +1938,15 @@ class TestSuperscriptSubscriptConversion(unittest.TestCase):
         </html>
         """
         result = html_to_markdown_with_frontmatter(html)
-        
+
         # Check frontmatter exists
         self.assertTrue(result.startswith("---"))
         self.assertIn("primary_language: es", result)
         self.assertIn("is_table:", result)
-        
+
         # Also check the conversion happened
         self.assertIn("x²", result)
-    
+
     def test_unmapped_characters(self):
         """Test characters not in the mapping"""
         html = """
@@ -1948,12 +1958,12 @@ class TestSuperscriptSubscriptConversion(unittest.TestCase):
         </html>
         """
         result = html_to_markdown_with_frontmatter(html)
-        
+
         # Unmapped characters should be left as-is or handled gracefully
         self.assertIn("H₂SO₄", result)
         # Asterisk is not in the map, so it might remain as-is
         self.assertTrue("note*" in result or "note<sup>*</sup>" in result or "note^*" in result)
-    
+
     def test_empty_super_subscripts(self):
         """Test empty sup/sub tags"""
         html = """
@@ -1965,13 +1975,13 @@ class TestSuperscriptSubscriptConversion(unittest.TestCase):
         </html>
         """
         result = html_to_markdown_with_frontmatter(html)
-        
+
         # Empty tags should not cause errors
         self.assertIn("z²", result)
         # Empty tags should just be removed
         self.assertIn("x", result)
         self.assertIn("y", result)
-    
+
     def test_complex_math_expression(self):
         """Test a complex mathematical expression"""
         html = """
@@ -1983,10 +1993,10 @@ class TestSuperscriptSubscriptConversion(unittest.TestCase):
         </html>
         """
         result = html_to_markdown_with_frontmatter(html)
-        
+
         # Check complex nested expressions
         self.assertIn("x₁", result)
-        self.assertIn("x₂", result) 
+        self.assertIn("x₂", result)
         self.assertIn("r²", result)
         self.assertIn("a₀", result)
         self.assertIn("a₁", result)
@@ -1995,5 +2005,5 @@ class TestSuperscriptSubscriptConversion(unittest.TestCase):
         self.assertIn("xⁿ", result)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     unittest.main()

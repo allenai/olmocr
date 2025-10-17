@@ -1494,15 +1494,8 @@ class TestBaselineTest(unittest.TestCase):
     def test_max_length_with_image_tags_skipped(self):
         """Test that image tags are properly removed when max_length_skips_image_alt_tags is True"""
         # Test with max_length_skips_image_alt_tags=True
-        test = BaselineTest(
-            pdf="test.pdf", 
-            page=1, 
-            id="test_id", 
-            type=TestType.BASELINE.value,
-            max_length=10,
-            max_length_skips_image_alt_tags=True
-        )
-        
+        test = BaselineTest(pdf="test.pdf", page=1, id="test_id", type=TestType.BASELINE.value, max_length=10, max_length_skips_image_alt_tags=True)
+
         # Content with image tag that would exceed max_length if counted
         content = "Hello ![Diagram showing labeled components 100, 101, 102, 103, 104, 105, 102A, 103A, 104A, 105A, 220, 130, and 140 within a rectangular frame.](page_370_682_1012_1012.png) World"
         result, _ = test.run(content)
@@ -1512,14 +1505,8 @@ class TestBaselineTest(unittest.TestCase):
     def test_max_length_with_image_tags_not_skipped(self):
         """Test that image tags are counted when max_length_skips_image_alt_tags is False"""
         # Test with max_length_skips_image_alt_tags=False (default)
-        test = BaselineTest(
-            pdf="test.pdf",
-            page=1,
-            id="test_id",
-            type=TestType.BASELINE.value,
-            max_length=10
-        )
-        
+        test = BaselineTest(pdf="test.pdf", page=1, id="test_id", type=TestType.BASELINE.value, max_length=10)
+
         # Same content with image tag
         content = "Hello ![Diagram showing labeled components 100, 101, 102, 103, 104, 105, 102A, 103A, 104A, 105A, 220, 130, and 140 within a rectangular frame.](page_370_682_1012_1012.png) World"
         result, explanation = test.run(content)
@@ -1529,15 +1516,8 @@ class TestBaselineTest(unittest.TestCase):
 
     def test_multiple_image_tags_removed(self):
         """Test that multiple image tags are removed correctly"""
-        test = BaselineTest(
-            pdf="test.pdf",
-            page=1,
-            id="test_id",
-            type=TestType.BASELINE.value,
-            max_length=15,
-            max_length_skips_image_alt_tags=True
-        )
-        
+        test = BaselineTest(pdf="test.pdf", page=1, id="test_id", type=TestType.BASELINE.value, max_length=15, max_length_skips_image_alt_tags=True)
+
         content = "Start ![First image](img1.png) middle ![Second image](img2.png) end"
         result, _ = test.run(content)
         # Should pass because "Start middle end" = "Startmiddleend" has 14 alphanumeric characters
@@ -1545,15 +1525,8 @@ class TestBaselineTest(unittest.TestCase):
 
     def test_nested_brackets_in_image_tags(self):
         """Test that image tags with nested brackets are handled correctly"""
-        test = BaselineTest(
-            pdf="test.pdf",
-            page=1,
-            id="test_id",
-            type=TestType.BASELINE.value,
-            max_length=8,
-            max_length_skips_image_alt_tags=True
-        )
-        
+        test = BaselineTest(pdf="test.pdf", page=1, id="test_id", type=TestType.BASELINE.value, max_length=8, max_length_skips_image_alt_tags=True)
+
         content = "Text ![Complex [nested] description](image.png) here"
         result, _ = test.run(content)
         # Should pass because "Text here" = "Texthere" has 8 alphanumeric characters

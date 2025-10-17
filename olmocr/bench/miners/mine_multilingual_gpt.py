@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
 """
-mine_tables_gpt_simple.py - Identify PDF documents with tables and copy them.
+mine_multilingual_gpt.py - Identify PDF documents with tables and copy them.
 
 This script:
 1. Takes a file containing S3 paths to PDF documents as input
-2. For each PDF, renders a random page and uses GPT-4o to check for tables
-3. Identifies PDFs where the page contains a table
+2. For each PDF, renders a random page and uses GPT-4o to check the primary language
+3. Identifies PDFs where the page is not in english
 4. Copies those PDF files to a new output folder
 
 Usage:
-  python mine_tables_gpt_simple.py --input_list path/to/s3_paths.txt --output_dir path/to/output --api_key your_openai_api_key
+  python mine_multilingual_gpt.py --input_list path/to/s3_paths.txt --output_dir path/to/output --api_key your_openai_api_key
 """
 
 import argparse
@@ -20,6 +20,7 @@ from typing import Optional
 
 import boto3
 import pypdf
+from lingua import Language
 from openai import OpenAI
 from pydantic import BaseModel
 from tqdm import tqdm
@@ -27,13 +28,13 @@ from tqdm import tqdm
 from olmocr.data.renderpdf import render_pdf_to_base64png
 from olmocr.filter import PdfFilter
 
-TARGET_IMAGE_DIM = 2048
+TARGET_IMAGE_DIM = 1024
 
 
-class TableDetectionResponse(BaseModel):
+class LanguageDetectionResponse(BaseModel):
     """Structured output for table detection."""
 
-    contains_table: bool
+    two_letter_language_code: str
 
 
 def download_pdf_from_s3(s3_path: str, local_path: str) -> bool:
@@ -87,7 +88,7 @@ def check_for_table(pdf_path: str, page_num: int, api_key: str) -> Optional[bool
         image_base64 = render_pdf_to_base64png(pdf_path, page_num=page_num + 1, target_longest_image_dim=TARGET_IMAGE_DIM)
 
         # Simple prompt asking about tables
-        prompt = "Does this page contain a table on it?"
+        prompt = "Respond with the primary language that this document is written in. Reply in JSON, and use a two letter ISO 639 language code, such as 'en', 'pt', 'fr', etc."
 
         response = client.beta.chat.completions.parse(
             model="gpt-4o-2024-08-06",
@@ -99,7 +100,7 @@ def check_for_table(pdf_path: str, page_num: int, api_key: str) -> Optional[bool
             ],
             temperature=0.1,
             max_tokens=100,
-            response_format=TableDetectionResponse,
+            response_format=LanguageDetectionResponse,
         )
 
         if not response.choices or len(response.choices) == 0:
@@ -113,12 +114,12 @@ def check_for_table(pdf_path: str, page_num: int, api_key: str) -> Optional[bool
             print(f"Failed to parse response for {pdf_path} page {page_num}")
             return None
 
-        has_table = parsed_response.contains_table
+        is_non_english = parsed_response.two_letter_language_code.lower() != "en"
 
-        if has_table:
-            print(f"Found table in {pdf_path} page {page_num + 1}")
+        if is_non_english:
+            print(f"Found {parsed_response.two_letter_language_code} language in {pdf_path} page {page_num + 1}")
 
-        return has_table
+        return is_non_english
 
     except Exception as e:
         print(f"Error checking {pdf_path} page {page_num}: {str(e)}")
@@ -146,7 +147,7 @@ def process_pdf(s3_path: str, temp_dir: str, output_dir: str, api_key: str) -> b
     if not download_pdf_from_s3(s3_path, local_pdf_path):
         return False
 
-    pdf_filter = PdfFilter()
+    pdf_filter = PdfFilter(languages_to_keep=Language.all())
 
     if pdf_filter.filter_out_pdf(local_pdf_path):
         print(f"Filtering out {pdf_filename}")
@@ -287,7 +288,7 @@ def main():
                     print(f"Reached maximum number of PDFs with tables ({args.max_pdfs}), stopping")
                     break
 
-    print(f"Found and copied {table_pdfs_found} PDFs with tables to {args.output_dir}")
+    print(f"Found and copied {table_pdfs_found} PDFs to {args.output_dir}")
 
 
 if __name__ == "__main__":

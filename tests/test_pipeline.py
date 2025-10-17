@@ -192,6 +192,7 @@ class MockArgs:
     max_page_retries: int = 8
     target_longest_image_dim: int = 1288
     guided_decoding: bool = False
+    server: str | None = None
 
 
 class TestRotationCorrection:
@@ -208,7 +209,7 @@ class TestRotationCorrection:
         # Counter to track number of API calls
         call_count = 0
 
-        async def mock_apost(url, json_data):
+        async def mock_apost(url, json_data, api_key=None):
             nonlocal call_count
             call_count += 1
 
@@ -267,9 +268,9 @@ This is the corrected text from the document."""
         build_page_query_calls = []
         original_build_page_query = build_page_query
 
-        async def mock_build_page_query(local_pdf_path, page, target_longest_image_dim, image_rotation=0):
+        async def mock_build_page_query(local_pdf_path, page, target_longest_image_dim, image_rotation=0, model_name="olmocr"):
             build_page_query_calls.append(image_rotation)
-            return await original_build_page_query(local_pdf_path, page, target_longest_image_dim, image_rotation)
+            return await original_build_page_query(local_pdf_path, page, target_longest_image_dim, image_rotation, model_name)
 
         with patch("olmocr.pipeline.apost", side_effect=mock_apost):
             with patch("olmocr.pipeline.tracker", mock_tracker):
@@ -310,7 +311,7 @@ This is the corrected text from the document."""
         # Counter to track number of API calls
         call_count = 0
 
-        async def mock_apost(url, json_data):
+        async def mock_apost(url, json_data, api_key=None):
             nonlocal call_count
             call_count += 1
 
@@ -375,9 +376,9 @@ Document is now correctly oriented after 180 degree rotation."""
         build_page_query_calls = []
         original_build_page_query = build_page_query
 
-        async def mock_build_page_query(local_pdf_path, page, target_longest_image_dim, image_rotation=0):
+        async def mock_build_page_query(local_pdf_path, page, target_longest_image_dim, image_rotation=0, model_name="olmocr"):
             build_page_query_calls.append(image_rotation)
-            return await original_build_page_query(local_pdf_path, page, target_longest_image_dim, image_rotation)
+            return await original_build_page_query(local_pdf_path, page, target_longest_image_dim, image_rotation, model_name)
 
         with patch("olmocr.pipeline.apost", side_effect=mock_apost):
             with patch("olmocr.pipeline.tracker", mock_tracker):
@@ -419,7 +420,7 @@ Document is now correctly oriented after 180 degree rotation."""
         # Counter to track number of API calls
         call_count = 0
 
-        async def mock_apost(url, json_data):
+        async def mock_apost(url, json_data, api_key=None):
             nonlocal call_count
             call_count += 1
 
@@ -481,9 +482,9 @@ Document correctly oriented at 90 degrees total rotation."""
         build_page_query_calls = []
         original_build_page_query = build_page_query
 
-        async def mock_build_page_query(local_pdf_path, page, target_longest_image_dim, image_rotation=0):
+        async def mock_build_page_query(local_pdf_path, page, target_longest_image_dim, image_rotation=0, model_name="olmocr"):
             build_page_query_calls.append(image_rotation)
-            return await original_build_page_query(local_pdf_path, page, target_longest_image_dim, image_rotation)
+            return await original_build_page_query(local_pdf_path, page, target_longest_image_dim, image_rotation, model_name)
 
         with patch("olmocr.pipeline.apost", side_effect=mock_apost):
             with patch("olmocr.pipeline.tracker", mock_tracker):

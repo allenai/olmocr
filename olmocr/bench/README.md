@@ -49,6 +49,18 @@ to run it against your own OCR tools. Your tool just needs to support Markdown o
       <td align="center">48.3 ± 1.1</td>
     </tr>
     <tr>
+      <td align="left">Marker v1.10.1 (base, force_ocr)</td>
+      <td align="center"><strong>83.8</strong></td>
+      <td align="center">66.8</td>
+      <td align="center">72.9</td>
+      <td align="center">33.5</td>
+      <td align="center">86.6</td>
+      <td align="center">80.0</td>
+      <td align="center"><strong>85.7</strong></td>
+      <td align="center">99.3</td>
+      <td align="center">76.1 ± 1.1</td>
+    </tr>
+    <!-- <tr>
       <td align="left">Marker v1.7.5 (base, force_ocr)</td>
       <td align="center">76.0</td>
       <td align="center">57.9</td>
@@ -59,8 +71,20 @@ to run it against your own OCR tools. Your tool just needs to support Markdown o
       <td align="center"><strong>84.6</strong></td>
       <td align="center">99.1</td>
       <td align="center">70.1 ± 1.1</td>
-    </tr>
+    </tr> -->
     <tr>
+      <td align="left">MinerU v2.5.4</td>
+      <td align="center">75.5</td>
+      <td align="center">50.2</td>
+      <td align="center">59.9</td>
+      <td align="center">19.2</td>
+      <td align="center"><strong>97.0</strong></td>
+      <td align="center">58.7</td>
+      <td align="center">44.6</td>
+      <td align="center">97.8</td>
+      <td align="center">62.9 ± 1.1</td>
+    </tr>
+    <!-- <tr>
       <td align="left">MinerU v1.3.10</td>
       <td align="center">75.4</td>
       <td align="center">47.4</td>
@@ -71,7 +95,7 @@ to run it against your own OCR tools. Your tool just needs to support Markdown o
       <td align="center">39.1</td>
       <td align="center">96.6</td>
       <td align="center">61.5 ± 1.1</td>
-    </tr>
+    </tr> -->
     <tr>
       <td align="left">Mistral OCR API</td>
       <td align="center">77.2</td>
@@ -88,7 +112,7 @@ to run it against your own OCR tools. Your tool just needs to support Markdown o
       <td align="left">Nanonets OCR</td>
       <td align="center">67.0</td>
       <td align="center">68.6</td>
-      <td align="center"><strong>77.7</strong></td>
+      <td align="center">77.7</td>
       <td align="center">39.5</td>
       <td align="center">40.7</td>
       <td align="center">69.9</td>
@@ -194,20 +218,20 @@ to run it against your own OCR tools. Your tool just needs to support Markdown o
     </tr>
     <tr>
       <td align="left">olmOCR v0.2.0</td>
-      <td align="center"><strong>78.8</strong></td>
+      <td align="center">78.8</td>
       <td align="center">77.5</td>
       <td align="center">71.9</td>
-      <td align="center"><strong>45.4</strong></td>
+      <td align="center">45.4</td>
       <td align="center">94.2</td>
-      <td align="center"><strong>78.6</strong></td>
+      <td align="center">78.6</td>
       <td align="center">81.4</td>
       <td align="center"><strong>99.8</strong></td>
-      <td align="center"><strong>78.5 ± 1.1</strong></td>
+      <td align="center">78.5 ± 1.1</td>
     </tr>
     <tr>
       <td align="left">olmOCR v0.3.0</td>
       <td align="center">78.6</td>
-      <td align="center"><strong>79.9</strong></td>
+      <td align="center">79.9</td>
       <td align="center">72.9</td>
       <td align="center">43.9</td>
       <td align="center">95.1</td>
@@ -215,10 +239,21 @@ to run it against your own OCR tools. Your tool just needs to support Markdown o
       <td align="center">81.2</td>
       <td align="center">98.9</td>
       <td align="center">78.5 ± 1.1</td>
-    </tr>    
+    </tr>   
+    <tr>
+      <td align="left">olmOCR pipeline v0.4.0</td>
+      <td align="center">83.0</td>
+      <td align="center"><strong>82.3</strong></td>
+      <td align="center"><strong>84.9</strong></td>
+      <td align="center"><strong>47.7</strong></td>
+      <td align="center">96.1</td>
+      <td align="center"><strong>83.7</strong></td>
+      <td align="center">81.9</td>
+      <td align="center">99.7</td>
+      <td align="center"><strong>82.4 ± 1.1</strong></td>
+    </tr>  
   </tbody>
 </table>
-
 
 <sup><sub>There was a small drop in scores from olmOCR v0.1.68 (77.4), which is due to two factors. One, is that we have adjusted our benchmark code to not include
 any "fallback" mechanism when measuring benchmark scores (though it still exists when you run olmocr.pipeline). Second, there is a small drop in scores as we have updated
@@ -309,13 +344,13 @@ huggingface-cli download --repo-type dataset --resume-download allenai/olmOCR-be
 Convert your documents
 ```bash
 # You will need to install the [gpu] subset of olmocr dependencies to run gpu inference
+# Then convert using using olmocr.bench.convert, see the olmocr/bench/runners directory for options
 pip install olmocr[gpu] --find-links https://flashinfer.ai/whl/cu124/torch2.4/flashinfer/
-
-# convert using the same engine as olmOCR pipeline.py uses, see the olmocr/bench/runners directory for options
 python -m olmocr.bench.convert olmocr_pipeline --dir ./olmOCR-bench/bench_data
 
-# or use convert_all.sh to run OCR with many common frameworks all at once, API keys will be required
-./olmocr/bench/scripts/convert_all.sh
+# OR, you can use the pipeline to convert the benchmark PDFs and move them into the final format
+python -m olmocr.pipeline ./localworkspace --markdown --pdfs ./olmOCR-bench/bench_data/pdfs/**/*.pdf 
+python olmocr/bench/scripts/workspace_to_bench.py localworkspace/ olmOCR-bench/bench_data/olmocr --bench-path ./olmOCR-bench/
 ```
 
 Now run the benchmark

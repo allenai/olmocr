@@ -1,11 +1,14 @@
 import argparse
 import asyncio
+import glob
+import hashlib
 import json
 import logging
 import os
 import random
 import re
 import subprocess
+import tempfile
 import uuid
 from collections import defaultdict
 from typing import Dict, List
@@ -13,87 +16,127 @@ from typing import Dict, List
 import pypdf
 from anthropic import AsyncAnthropic
 from bs4 import BeautifulSoup
-from markdownify import MarkdownConverter, SPACES
+from markdownify import SPACES, MarkdownConverter
 from playwright.async_api import async_playwright
 from syntok.segmenter import process
 from tqdm import tqdm
 
-from olmocr.bench.tests import TableTest, TestType, parse_html_tables, load_single_test
+from olmocr.bench.tests import TableTest, TestType, parse_html_tables
 from olmocr.data.renderpdf import (
     get_png_dimensions_from_base64,
     render_pdf_to_base64png,
 )
-from olmocr.filter.filter import PdfFilter, Language
-
+from olmocr.filter.filter import Language, PdfFilter
 
 # Global variables for tracking Claude API costs
 total_input_tokens = 0
 total_output_tokens = 0
 
 
+def get_git_commit_hash():
+    """Get the current git commit hash, if available."""
+    try:
+        result = subprocess.run(["git", "rev-parse", "HEAD"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=True)
+        return result.stdout.strip()
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        # Git not available or not a git repository
+        return None
+
+
 # Unicode mappings for superscript characters
 SUPERSCRIPT_MAP = {
-    "0": "⁰", "1": "¹", "2": "²", "3": "³", "4": "⁴",
-    "5": "⁵", "6": "⁶", "7": "⁷", "8": "⁸", "9": "⁹",
-    "+": "⁺", "-": "⁻", "=": "⁼", "(": "⁽", ")": "⁾",
-    "n": "ⁿ", "i": "ⁱ"
+    "0": "⁰",
+    "1": "¹",
+    "2": "²",
+    "3": "³",
+    "4": "⁴",
+    "5": "⁵",
+    "6": "⁶",
+    "7": "⁷",
+    "8": "⁸",
+    "9": "⁹",
+    "+": "⁺",
+    "-": "⁻",
+    "=": "⁼",
+    "(": "⁽",
+    ")": "⁾",
+    "n": "ⁿ",
+    "i": "ⁱ",
 }
 
 # Unicode mappings for subscript characters
 SUBSCRIPT_MAP = {
-    "0": "₀", "1": "₁", "2": "₂", "3": "₃", "4": "₄",
-    "5": "₅", "6": "₆", "7": "₇", "8": "₈", "9": "₉",
-    "+": "₊", "-": "₋", "=": "₌", "(": "₍", ")": "₎",
-    "a": "ₐ", "e": "ₑ", "o": "ₒ", "x": "ₓ", "h": "ₕ",
-    "k": "ₖ", "l": "ₗ", "m": "ₘ", "n": "ₙ", "p": "ₚ",
-    "s": "ₛ", "t": "ₜ"
+    "0": "₀",
+    "1": "₁",
+    "2": "₂",
+    "3": "₃",
+    "4": "₄",
+    "5": "₅",
+    "6": "₆",
+    "7": "₇",
+    "8": "₈",
+    "9": "₉",
+    "+": "₊",
+    "-": "₋",
+    "=": "₌",
+    "(": "₍",
+    ")": "₎",
+    "a": "ₐ",
+    "e": "ₑ",
+    "o": "ₒ",
+    "x": "ₓ",
+    "h": "ₕ",
+    "k": "ₖ",
+    "l": "ₗ",
+    "m": "ₘ",
+    "n": "ₙ",
+    "p": "ₚ",
+    "s": "ₛ",
+    "t": "ₜ",
 }
 
 
 def convert_superscripts_subscripts(element):
     """
     Convert HTML superscript and subscript tags to Unicode equivalents.
-    
+
     This function finds all <sup> and <sub> tags in the given element and
     replaces them with their Unicode character equivalents. Characters not
     in the mapping are left unchanged.
-    
+
     Args:
         element: A BeautifulSoup element to process
-        
+
     Returns:
         The element with sup/sub tags converted to Unicode
     """
     if not element:
         return element
-    
+
     # Process all superscript tags
     for sup in element.find_all("sup"):
         sup_text = sup.get_text()
-        unicode_text = "".join(
-            SUPERSCRIPT_MAP.get(char, char) for char in sup_text
-        )
+        unicode_text = "".join(SUPERSCRIPT_MAP.get(char, char) for char in sup_text)
         sup.replace_with(unicode_text)
-    
+
     # Process all subscript tags
     for sub in element.find_all("sub"):
         sub_text = sub.get_text()
-        unicode_text = "".join(
-            SUBSCRIPT_MAP.get(char, char) for char in sub_text
-        )
+        unicode_text = "".join(SUBSCRIPT_MAP.get(char, char) for char in sub_text)
         sub.replace_with(unicode_text)
-    
+
     return element
 
 
 def download_s3_pdf(path, local_path):
     """Download a PDF from S3 or copy from local path."""
     os.makedirs(os.path.dirname(local_path), exist_ok=True)
-    
+
     # Check if it's a local path
     if os.path.exists(path):
         # It's a local file, just copy it
         import shutil
+
         try:
             shutil.copy2(path, local_path)
             return True
@@ -114,152 +157,148 @@ class PreserveTablesConverter(MarkdownConverter):
     """
     Custom MarkdownConverter that preserves HTML tables unchanged
     """
+
     def convert_table(self, el, text, parent_tags):
         # Get the outer HTML of the table element
         # BeautifulSoup's prettify or str() should give us the full HTML
         from bs4 import BeautifulSoup
+
         # Create a temporary soup with just this element to get its HTML
-        temp_soup = BeautifulSoup(str(el), 'html.parser')
+        temp_soup = BeautifulSoup(str(el), "html.parser")
         return str(temp_soup.table) if temp_soup.table else str(el)
 
 
 def extract_html_metadata(html_content):
     """Extract metadata from HTML content for FrontMatter."""
-    soup = BeautifulSoup(html_content, 'html.parser')
-    
+    soup = BeautifulSoup(html_content, "html.parser")
+
     # Extract language from html tag
-    html_tag = soup.find('html')
-    language = 'en'  # default
-    if html_tag and html_tag.get('lang'):
-        language = str(html_tag.get('lang'))
+    html_tag = soup.find("html")
+    language = "en"  # default
+    if html_tag and html_tag.get("lang"):
+        language = str(html_tag.get("lang"))
         # Convert pt-BR to pt for now
         if len(language) == 5 and language[2] == "-":
             language = language[:2]
-    
+
     # Calculate content statistics
-    body = soup.find('body')
+    body = soup.find("body")
     if not body:
         body = soup
-    
+
     # First, create a version without headers and footers for all calculations
-    main_content_soup = BeautifulSoup(str(body), 'html.parser')
+    main_content_soup = BeautifulSoup(str(body), "html.parser")
     # Remove headers and footers from main content
-    for element in main_content_soup.find_all(['header', 'footer']):
+    for element in main_content_soup.find_all(["header", "footer"]):
         element.decompose()
-    
+
     # Get text content length (excluding tables and images)
-    text_soup = BeautifulSoup(str(main_content_soup), 'html.parser')
+    text_soup = BeautifulSoup(str(main_content_soup), "html.parser")
     # Remove tables
-    for element in text_soup.find_all('table'):
+    for element in text_soup.find_all("table"):
         element.decompose()
     # Remove images (div.image)
-    for element in text_soup.find_all('div', class_='image'):
+    for element in text_soup.find_all("div", class_="image"):
         element.decompose()
     text_content = text_soup.get_text().strip()
     text_length = len(text_content)
-    
+
     # Count table content (from main content, excluding headers/footers)
-    tables = main_content_soup.find_all('table')
+    tables = main_content_soup.find_all("table")
     table_text_length = 0
     for table in tables:
         table_text_length += len(table.get_text().strip())
-    
+
     # Count images (div.image elements) (from main content, excluding headers/footers)
-    images = main_content_soup.find_all('div', class_='image')
+    images = main_content_soup.find_all("div", class_="image")
     # Rough estimate: each image takes up about 500 characters worth of "space"
     image_content_estimate = len(images) * 500
-    
+
     # Calculate total content "length"
     total_content_length = text_length + table_text_length + image_content_estimate
-    
+
     # Determine if mostly tables or images
     is_table = False
     is_diagram = False
-    
+
     if total_content_length > 0:
         table_ratio = table_text_length / total_content_length
         image_ratio = image_content_estimate / total_content_length
-        
+
         is_table = table_ratio > 0.5
         is_diagram = image_ratio > 0.5
-    
-    return {
-        'primary_language': language,
-        'is_rotation_valid': True,
-        'rotation_correction': 0,
-        'is_table': is_table,
-        'is_diagram': is_diagram
-    }
+
+    return {"primary_language": language, "is_rotation_valid": True, "rotation_correction": 0, "is_table": is_table, "is_diagram": is_diagram}
 
 
 def html_to_markdown_with_frontmatter(html_content):
     """Convert HTML to markdown with FrontMatter metadata."""
     # Extract metadata
     metadata = extract_html_metadata(html_content)
-    
+
     # Parse HTML and extract only body content for markdown conversion
-    soup = BeautifulSoup(html_content, 'html.parser')
-    body = soup.find('body')
-    
+    soup = BeautifulSoup(html_content, "html.parser")
+    body = soup.find("body")
+
     # If no body tag, use the whole soup as fallback
     if body:
         # Create a new soup with just the body content
-        body_soup = BeautifulSoup(str(body), 'html.parser')
+        body_soup = BeautifulSoup(str(body), "html.parser")
     else:
         body_soup = soup
-    
+
     # First, remove all header and footer elements from the body
-    for header in body_soup.find_all('header'):
+    for header in body_soup.find_all("header"):
         header.decompose()
-    for footer in body_soup.find_all('footer'):
+    for footer in body_soup.find_all("footer"):
         footer.decompose()
-    
+
     # Also remove divs with page-header or page-footer classes (in case they weren't converted to header/footer tags)
-    for div in body_soup.find_all('div', class_='page-header'):
+    for div in body_soup.find_all("div", class_="page-header"):
         div.decompose()
-    for div in body_soup.find_all('div', class_='page-footer'):
+    for div in body_soup.find_all("div", class_="page-footer"):
         div.decompose()
-    
+
     # Handle image placeholders - replace div.image with actual img tags for proper markdown conversion
-    for img_div in body_soup.find_all('div', class_='image'):
-        alt_text = "Image Placeholder" # For now, in the render it's all just a placeholder
+    for img_div in body_soup.find_all("div", class_="image"):
+        alt_text = "Image Placeholder"  # For now, in the render it's all just a placeholder
         # Create an img tag with placeholder src and appropriate alt text
-        img_tag = body_soup.new_tag('img', src='page.png', alt=alt_text)
+        img_tag = body_soup.new_tag("img", src="page.png", alt=alt_text)
         img_div.replace_with(img_tag)
-    
+
     # Convert superscripts and subscripts to Unicode before markdown conversion
     convert_superscripts_subscripts(body_soup)
-    
+
     # Get the modified HTML (only body content)
     modified_html = str(body_soup)
-    
+
     # Create custom converter instance
     converter = PreserveTablesConverter(
         heading_style="ATX",  # Use # style headings
         bullets="-",  # Use - for unordered lists
-        strip=['a'],  # Remove links but keep text
+        strip=["a"],  # Remove links but keep text
         newline_style=SPACES,  # Use backslash for line breaks
         code_language="",  # Don't add language to code blocks
         escape_asterisks=False,  # Don't escape asterisks
-        escape_underscores=False  # Don't escape underscores
+        escape_underscores=False,  # Don't escape underscores
     )
-    
+
     # Convert to markdown
     markdown = converter.convert(modified_html)
-    
+
     # Clean up excessive newlines
-    while '\n\n\n' in markdown:
-        markdown = markdown.replace('\n\n\n', '\n\n')
-    
+    while "\n\n\n" in markdown:
+        markdown = markdown.replace("\n\n\n", "\n\n")
+
     # Strip and clean up markdown content
     markdown_content = markdown.strip()
-    
+
     # Remove leading or trailing --- if present
-    while markdown_content.startswith('---'):
+    while markdown_content.startswith("---"):
         markdown_content = markdown_content[3:].strip()
-    while markdown_content.endswith('---'):
+    while markdown_content.endswith("---"):
         markdown_content = markdown_content[:-3].strip()
-    
+
     # Create FrontMatter
     frontmatter = f"""---
 primary_language: {metadata['primary_language']}
@@ -268,7 +307,7 @@ rotation_correction: {metadata['rotation_correction']}
 is_table: {metadata['is_table']}
 is_diagram: {metadata['is_diagram']}
 ---"""
-    
+
     # Combine FrontMatter with markdown content
     if markdown_content:
         return f"{frontmatter}\n{markdown_content}"
@@ -311,10 +350,55 @@ async def generate_html_from_image(client, image_base64):
     png_width, png_height = get_png_dimensions_from_base64(image_base64)
 
     try:
+        # Step 0: Check that the orientation of the original document is right-side-up. If not, we will
+        # skip this page, to keep the code simple
+        orientation_response = await client.messages.create(
+            model="claude-sonnet-4-5-20250929",
+            max_tokens=1000,
+            temperature=0,
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": image_base64}},
+                        {
+                            "type": "text",
+                            "text": "Please analyze this document image and determine its orientation.\n\n"
+                            "Is this document right-side-up (correctly oriented), or is it rotated?\n\n"
+                            "Make your decision based on the main document contents that takes up most of the page area.\n\n"
+                            "Respond with ONLY one of the following:\n"
+                            "- RIGHT_SIDE_UP: The document is correctly oriented and readable\n"
+                            "- ROTATED_90: The document is rotated 90 degrees clockwise\n"
+                            "- ROTATED_180: The document is upside down (rotated 180 degrees)\n"
+                            "- ROTATED_270: The document is rotated 270 degrees clockwise (90 degrees counter-clockwise)\n"
+                            "- UNCLEAR: Cannot determine orientation (e.g., blank page, purely graphical content)\n\n"
+                            "Important: Only respond with one of these exact terms, nothing else.",
+                        },
+                    ],
+                }
+            ],
+        )
+
+        # Extract orientation from response
+        orientation_text = ""
+        for content in orientation_response.content:
+            if content.type == "text":
+                orientation_text += content.text.strip()
+
+        # Track token usage from orientation check
+        if hasattr(orientation_response, "usage"):
+            total_input_tokens += orientation_response.usage.input_tokens
+            total_output_tokens += orientation_response.usage.output_tokens
+
+        # Check orientation result
+        if "RIGHT_SIDE_UP" not in orientation_text:
+            print(f"Skipping page due to orientation: {orientation_text}")
+            return None
+
         # Step 1: Initial analysis and column detection
         analysis_response = await client.messages.create(
-            model="claude-sonnet-4-20250514",
-            max_tokens=2000,
+            model="claude-sonnet-4-5-20250929",
+            max_tokens=20000,
             temperature=0.1,
             messages=[
                 {
@@ -335,20 +419,25 @@ async def generate_html_from_image(client, image_base64):
             ],
         )
 
+        # Check if response was complete
+        if hasattr(analysis_response, "stop_reason") and analysis_response.stop_reason != "end_turn":
+            print(f"Warning: Analysis response incomplete (stop_reason: {analysis_response.stop_reason})")
+            return None
+
         analysis_text = ""
         for content in analysis_response.content:
             if content.type == "text":
                 analysis_text += content.text
-        
+
         # Track token usage from first API call
-        if hasattr(analysis_response, 'usage'):
+        if hasattr(analysis_response, "usage"):
             total_input_tokens += analysis_response.usage.input_tokens
             total_output_tokens += analysis_response.usage.output_tokens
 
         # Step 2: Initial HTML generation with detailed layout instructions
         initial_response = await client.messages.create(
-            model="claude-sonnet-4-20250514",
-            max_tokens=6000,
+            model="claude-sonnet-4-5-20250929",
+            max_tokens=20000,
             temperature=0.2,
             messages=[
                 {
@@ -366,7 +455,7 @@ async def generate_html_from_image(client, image_base64):
                             "4. Render any math equations and Latex inline using either \\[ \\] or \\( \\) delimeters.\n"
                             "5. CRITICAL: If the document has a multi-column layout, you MUST preserve the exact same number of columns in your HTML. Use CSS flexbox or grid to create the columns.\n"
                             "6. Focus on creating valid, accessible HTML that preserves the appearance and formatting of the original page as closely as possible.\n"
-                            f"7. The webpage will be viewed with a fixed viewport size of {png_width // 2} pixels wide by {png_height // 2} pixels tall.\n\n"
+                            f"7. The webpage will be viewed with a fixed viewport size of {png_width} pixels wide by {png_height} pixels tall.\n"
                             "8. For multi-column layouts, use explicit CSS. The most important aspect is preserving the column structure of the original document - this is critical.\n\n"
                             "Enclose your HTML in a ```html code block.",
                         },
@@ -375,18 +464,124 @@ async def generate_html_from_image(client, image_base64):
             ],
         )
 
+        # Check if response was complete
+        if hasattr(initial_response, "stop_reason") and initial_response.stop_reason != "end_turn":
+            print(f"Warning: Initial HTML response incomplete (stop_reason: {initial_response.stop_reason})")
+            return None
+
         # Extract initial HTML
-        initial_html = ""
+        initial_html_text = ""
         for content in initial_response.content:
             if content.type == "text":
-                initial_html += content.text
-        
+                initial_html_text += content.text
+
         # Track token usage from second API call
-        if hasattr(initial_response, 'usage'):
+        if hasattr(initial_response, "usage"):
             total_input_tokens += initial_response.usage.input_tokens
             total_output_tokens += initial_response.usage.output_tokens
 
-        return extract_code_block(initial_html)
+        initial_html = extract_code_block(initial_html_text)
+        if not initial_html:
+            print("Warning: No HTML code block found in initial response")
+            return None
+
+        # Step 3: Render the initial HTML to PDF and then back to PNG for comparison
+        # Create a temporary PDF file
+        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp_pdf:
+            tmp_pdf_path = tmp_pdf.name
+
+        try:
+            # Render HTML to PDF using existing function
+            render_success = await render_pdf_with_playwright(initial_html, tmp_pdf_path, png_width, png_height)
+
+            if not render_success:
+                print("Warning: Failed to render initial HTML to PDF for refinement")
+                # Fall back to returning the initial HTML without refinement
+                return initial_html
+
+            # Convert PDF back to PNG
+            rendered_image_base64 = render_pdf_to_base64png(tmp_pdf_path, 1, max(png_width, png_height))
+
+            if not rendered_image_base64:
+                print("Warning: Failed to convert rendered PDF to PNG for refinement")
+                # Fall back to returning the initial HTML without refinement
+                return initial_html
+
+            # Step 4: Refinement - Show both images to Claude and ask for corrections
+            async with client.messages.stream(
+                model="claude-sonnet-4-5-20250929",
+                max_tokens=40000,
+                temperature=1.0,
+                thinking={"type": "enabled", "budget_tokens": 12000},
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": "I'm going to show you two images:\n1. The original document\n2. How the HTML I generated renders\n\nPlease compare them carefully and provide a revised version of the HTML that better matches the original.",
+                            },
+                            {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": image_base64}},
+                            {"type": "text", "text": "Above is the ORIGINAL document."},
+                            {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": rendered_image_base64}},
+                            {"type": "text", "text": "Above is how my HTML currently renders."},
+                            {
+                                "type": "text",
+                                "text": f"Here is the current HTML code:\n\n```html\n{initial_html}\n```\n\n"
+                                "Please analyze the differences between the original document and the rendered version. Focus on:\n"
+                                "1. Layout issues - are columns preserved correctly?\n"
+                                "2. Positioning - are elements in the right place?\n"
+                                "3. Spacing - are margins, padding, and spacing between elements correct?\n"
+                                "4. Occlusion - is any important content hidden or overlapping?\n"
+                                "5. Text formatting - are fonts, sizes, and styles appropriate?\n"
+                                "6. Tables - are the headers on tables are aligned with the correct corresponding columns?\n"
+                                f"The webpage will be viewed at {png_width}x{png_height} pixels.\n\n"
+                                "Provide a REVISED version of the HTML that corrects any issues you identified. "
+                                "Make sure all important elements are visible and the layout matches the original as closely as possible.\n"
+                                "Output the complete revised HTML in a ```html code block.",
+                            },
+                        ],
+                    }
+                ],
+            ) as refinement_stream:
+
+                async for event in refinement_stream:
+                    pass
+
+                refinement_response = await refinement_stream.get_final_message()
+
+            # Check if refinement response was complete
+            if hasattr(refinement_response, "stop_reason") and refinement_response.stop_reason != "end_turn":
+                print(f"Warning: Refinement response incomplete (stop_reason: {refinement_response.stop_reason})")
+                # Return initial HTML as fallback since it was complete
+                return initial_html
+
+            # Extract refined HTML
+            refined_html_text = ""
+            for content in refinement_response.content:
+                if content.type == "text":
+                    refined_html_text += content.text
+
+            # Track token usage from refinement API call
+            if hasattr(refinement_response, "usage"):
+                total_input_tokens += refinement_response.usage.input_tokens
+                total_output_tokens += refinement_response.usage.output_tokens
+
+            refined_html = extract_code_block(refined_html_text)
+
+            # Return refined HTML if available, otherwise return initial HTML
+            if refined_html:
+                print("Successfully refined HTML using visual comparison")
+                return refined_html
+            else:
+                print("Warning: No HTML code block found in refinement response, using initial HTML")
+                return initial_html
+
+        finally:
+            # Clean up temporary PDF file
+            if os.path.exists(tmp_pdf_path):
+                os.remove(tmp_pdf_path)
+
     except Exception as e:
         print(f"Error calling Claude API: {e}")
         return None
@@ -449,11 +644,39 @@ async def render_pdf_with_playwright(html_content, output_pdf_path, png_width, p
     """
     scale_factors = [1.0, 0.9, 0.8, 0.7, 0.6, 0.5]  # Try these scale factors in order
 
+    # Determine page format based on PNG dimensions
+    # Define thresholds with some tolerance (±5%)
+    aspect_ratio = png_width / png_height
+
+    # Letter Portrait: 8.5" x 11" (aspect ratio ~0.77)
+    # Letter Landscape: 11" x 8.5" (aspect ratio ~1.29)
+    # A4 Portrait: 210mm x 297mm (aspect ratio ~0.71)
+    # A4 Landscape: 297mm x 210mm (aspect ratio ~1.41)
+
+    pdf_options = {
+        "path": output_pdf_path,
+        "print_background": True,
+    }
+
+    if 0.73 <= aspect_ratio <= 0.81:  # Letter Portrait (8.5/11 = 0.77)
+        pdf_options["width"] = "8.5in"
+        pdf_options["height"] = "11in"
+    elif 1.23 <= aspect_ratio <= 1.35:  # Letter Landscape (11/8.5 = 1.29)
+        pdf_options["width"] = "11in"
+        pdf_options["height"] = "8.5in"
+    elif 0.67 <= aspect_ratio <= 0.73:  # A4 Portrait (210/297 = 0.71)
+        pdf_options["width"] = "210mm"
+        pdf_options["height"] = "297mm"
+    elif 1.36 <= aspect_ratio <= 1.47:  # A4 Landscape (297/210 = 1.41)
+        pdf_options["width"] = "297mm"
+        pdf_options["height"] = "210mm"
+    # else: Other - leave width and height unset
+
     for scale in scale_factors:
         try:
             async with async_playwright() as p:
                 browser = await p.chromium.launch()
-                page = await browser.new_page(viewport={"width": int(png_width // 2 * scale), "height": int(png_height // 2 * scale)})
+                page = await browser.new_page(viewport={"width": int(png_width * scale), "height": int(png_height * scale)})
 
                 # Set the HTML content
                 await page.set_content(html_content)
@@ -485,11 +708,9 @@ async def render_pdf_with_playwright(html_content, output_pdf_path, png_width, p
                 )
 
                 # Save as PDF with formatting options
-                await page.pdf(
-                    path=output_pdf_path,
-                    scale=scale,
-                    print_background=True,
-                )
+                # Add scale to the options
+                pdf_options["scale"] = scale
+                await page.pdf(**pdf_options)
 
                 await browser.close()
 
@@ -514,7 +735,7 @@ async def render_pdf_with_playwright(html_content, output_pdf_path, png_width, p
     return False
 
 
-def generate_tests_from_html(html_content: str, pdf_id: str, page_num: int, verbose_table_testing: bool = False) -> List[Dict]:
+def generate_tests_from_html(html_content: str, pdf_id: str, page_num: int, random_gen: random.Random, verbose_table_testing: bool = False) -> List[Dict]:
     """
     Generate tests from HTML content parsed from the PDF.
 
@@ -663,6 +884,7 @@ def generate_tests_from_html(html_content: str, pdf_id: str, page_num: int, verb
     for table_idx, table_data in enumerate(table_data_list):
         # Get the table data as a numpy array
         table_array = table_data.data
+        table_tests = []
 
         # Skip tables that are too small
         if table_array.shape[0] < 2 or table_array.shape[1] < 2:
@@ -679,11 +901,11 @@ def generate_tests_from_html(html_content: str, pdf_id: str, page_num: int, verb
         else:
             cell_positions = [
                 (i, j)
-                for i in random.sample(non_header_rows, min(3, len(non_header_rows)))
-                for j in random.sample(non_header_cols, min(2, len(non_header_cols)))
+                for i in random_gen.sample(non_header_rows, min(3, len(non_header_rows)))
+                for j in random_gen.sample(non_header_cols, min(2, len(non_header_cols)))
             ]
 
-        random.shuffle(cell_positions)
+        random_gen.shuffle(cell_positions)
 
         # Create tests for each selected cell
         for row_idx, col_idx in cell_positions:
@@ -701,6 +923,7 @@ def generate_tests_from_html(html_content: str, pdf_id: str, page_num: int, verb
                 "type": TestType.TABLE.value,
                 "cell": cell_text,
                 "max_diffs": 0,
+                "ignore_markdown_tables": True,
             }
 
             # Check cell up
@@ -751,7 +974,7 @@ def generate_tests_from_html(html_content: str, pdf_id: str, page_num: int, verb
                         test_data["left_heading"] = left_heading
 
             # Only add the test if we have at least one relation
-            if len(test_data) > 6:  # 6 is the number of required fields
+            if any(x in test_data for x in ["up", "down", "left", "right", "top_heading", "left_heading"]):
                 # Verify that the test passes with the current table HTML
                 # Create the actual test object
                 test_obj = TableTest(
@@ -782,33 +1005,37 @@ def generate_tests_from_html(html_content: str, pdf_id: str, page_num: int, verb
 
                 # Only add tests that pass
                 if passed:
-                    tests.append(test_data)
+                    table_tests.append(test_data)
 
-            if len(tests) > 25:
+            if len(table_tests) > 25:
                 break
+
+        # Done with inner for loop iterating over cells
+        # So add in the bulk of the test cases back in now
+        tests.extend(table_tests)
 
     # Step 3: Generate TextPresenceTests and OrderingTests from markdown content
     # Convert HTML to markdown to get cleaner text for presence and ordering tests
     markdown_content = html_to_markdown_with_frontmatter(html_content)
-    
+
     # Remove any HTML tables from the markdown content
     # Tables can persist in markdown as raw HTML and we want to exclude them
-    markdown_content = re.sub(r'<table[^>]*>.*?</table>', '', markdown_content, flags=re.DOTALL | re.IGNORECASE)
-    
+    markdown_content = re.sub(r"<table[^>]*>.*?</table>", "", markdown_content, flags=re.DOTALL | re.IGNORECASE)
+
     # Extract just the content part (after frontmatter)
-    markdown_lines = markdown_content.split('\n')
+    markdown_lines = markdown_content.split("\n")
     content_start_idx = 0
-    
+
     # Skip frontmatter if present
-    if markdown_lines[0] == '---':
+    if markdown_lines[0] == "---":
         for idx, line in enumerate(markdown_lines[1:], 1):
-            if line == '---':
+            if line == "---":
                 content_start_idx = idx + 1
                 break
-    
+
     # Get markdown content without frontmatter
-    markdown_text = '\n'.join(markdown_lines[content_start_idx:]).strip()
-    
+    markdown_text = "\n".join(markdown_lines[content_start_idx:]).strip()
+
     # Parse sentences from markdown content
     sentences = []
     if markdown_text:
@@ -823,28 +1050,28 @@ def generate_tests_from_html(html_content: str, pdf_id: str, page_num: int, verb
 
                 if sentence_str:
                     # Skip HTML content that might still be in markdown
-                    if not sentence_str.startswith('<') and not sentence_str.endswith('>'):
+                    if not sentence_str.startswith("<") and not sentence_str.endswith(">"):
                         # Skip image placeholders - match any markdown image syntax ![...](...)
-                        if re.search(r'!\[.*?\]\(.*?\)', sentence_str):
+                        if re.search(r"!\[.*?\]\(.*?\)", sentence_str):
                             continue
-                        
+
                         # Remove leading # marks (markdown headers)
-                        while sentence_str.startswith('#'):
+                        while sentence_str.startswith("#"):
                             sentence_str = sentence_str[1:]
                         sentence_str = sentence_str.strip()
-                        
+
                         # Remove leading "- " for unordered lists
-                        if sentence_str.startswith('- '):
+                        if sentence_str.startswith("- "):
                             sentence_str = sentence_str[2:]
-                        
+
                         sentence_str = sentence_str.strip()
-                        
+
                         if sentence_str:  # Only add if there's still content after cleaning
                             sentences.append(sentence_str)
 
     # Add a few random ordering tests
     all_indexes = list(range(len(sentences)))
-    random.shuffle(all_indexes)
+    random_gen.shuffle(all_indexes)
     random_pairs = [(all_indexes[i * 2], all_indexes[i * 2 + 1]) for i in range(len(all_indexes) // 2)]
     random_pairs = [(min(i, j), max(i, j)) for (i, j) in random_pairs]
 
@@ -884,14 +1111,14 @@ def generate_tests_from_html(html_content: str, pdf_id: str, page_num: int, verb
             break
 
     # Step 4: Generate Math tests for LaTeX equations from the markdown
-    
+
     # Define math patterns to search for
     math_patterns = [
         (r"\$\$(.+?)\$\$", re.DOTALL),  # $$...$$ (multiline)
         (r"\\\((.+?)\\\)", re.DOTALL),  # \(...\) (multiline)
         (r"\\\[(.+?)\\\]", re.DOTALL),  # \[...\] (multiline)
     ]
-    
+
     math_equations = []
     for pattern, flags in math_patterns:
         matches = re.findall(pattern, markdown_content, flags)
@@ -901,7 +1128,7 @@ def generate_tests_from_html(html_content: str, pdf_id: str, page_num: int, verb
             # Skip empty or very short equations
             if len(equation) > 2:
                 math_equations.append(equation)
-    
+
     # Remove duplicates while preserving order
     seen = set()
     unique_equations = []
@@ -909,7 +1136,7 @@ def generate_tests_from_html(html_content: str, pdf_id: str, page_num: int, verb
         if eq not in seen:
             seen.add(eq)
             unique_equations.append(eq)
-    
+
     # Create math tests for up to 50 unique equations
     for i, equation in enumerate(unique_equations[:50]):
         tests.append(
@@ -920,6 +1147,7 @@ def generate_tests_from_html(html_content: str, pdf_id: str, page_num: int, verb
                 "type": "math",
                 "math": equation,
                 "max_diffs": 0,
+                "ignore_dollar_delimited": True,
             }
         )
 
@@ -958,7 +1186,7 @@ def generate_tests_from_html(html_content: str, pdf_id: str, page_num: int, verb
         if test.get("type") == "math":
             filtered_tests.append(test)
             continue
-            
+
         # Check all text fields in the test for alphanumeric content, LaTeX, and Unicode super/subscripts
         all_valid = True
         for field in text_fields:
@@ -997,7 +1225,6 @@ def generate_tests_from_html(html_content: str, pdf_id: str, page_num: int, verb
             test_signatures.add(test_signature)
             unique_tests.append(test)
 
-    
     return unique_tests
 
 
@@ -1018,11 +1245,20 @@ async def process_pdf(pdf_info, args, client, pdf_filter=None):
     if not download_s3_pdf(pdf_path, local_pdf_path):
         print(f"Failed to download/copy PDF from {pdf_path}")
         return None
-    
+
     # Apply filter if enabled
     if pdf_filter and pdf_filter.filter_out_pdf(local_pdf_path):
         print(f"PDF filtered out: {pdf_path}")
         return None
+
+    # Seed with SHA1 hash of PDF contents for reproducibility
+    with open(local_pdf_path, "rb") as f:
+        pdf_content = f.read()
+        pdf_hash = hashlib.sha1(pdf_content).hexdigest()
+
+    # Use the first 8 characters of the hash as an integer seed
+    seed = int(pdf_hash[:8], 16)
+    random_generator = random.Random(seed)
 
     try:
         # Get page count using pypdf
@@ -1034,17 +1270,33 @@ async def process_pdf(pdf_info, args, client, pdf_filter=None):
             return None
 
         # Select a random page
-        page_num = random.randint(1, num_pages)
+        page_num = random_generator.randint(1, num_pages)
 
         # Render the page as a base64 PNG (run in thread pool since it's blocking I/O)
         loop = asyncio.get_event_loop()
-        image_base64 = await loop.run_in_executor(None, render_pdf_to_base64png, local_pdf_path, page_num, 2048)
+        image_base64 = await loop.run_in_executor(None, render_pdf_to_base64png, local_pdf_path, page_num, 1024)
 
         # Generate HTML from the image
         html_content = await generate_html_from_image(client, image_base64)
         if not html_content:
             print(f"Failed to generate HTML for {pdf_path}, page {page_num}")
             return None
+
+        # Add git commit meta tag if available
+        git_commit = get_git_commit_hash()
+        if git_commit:
+            # Parse the HTML to add the meta tag in the head section
+            html_soup = BeautifulSoup(html_content, "html.parser")
+
+            # Only add meta tag if head element exists
+            head = html_soup.find("head")
+            if head:
+                # Add meta tag with git commit
+                meta_tag = html_soup.new_tag("meta", attrs={"name": "olmocr_git_commit", "content": git_commit})
+                head.insert(0, meta_tag)
+
+                # Update initial_html with the modified version
+                html_content = str(html_soup)
 
         # Create output directories
         html_dir = os.path.join(args.output_dir, "html", args.name)
@@ -1064,14 +1316,14 @@ async def process_pdf(pdf_info, args, client, pdf_filter=None):
         html_path = os.path.join(html_dir, f"{pdf_id}_page{page_num}.html")
         with open(html_path, "w") as f:
             f.write(html_content)
-        
+
         # Convert HTML to markdown with FrontMatter and save
         markdown_content = html_to_markdown_with_frontmatter(html_content)
         markdown_filename = f"{pdf_id}_page{page_num}.md"
         markdown_path = os.path.join(training_dir, markdown_filename)
         with open(markdown_path, "w") as f:
             f.write(markdown_content)
-        
+
         # Create soft link to PDF in training directory
         pdf_link_name = f"{pdf_id}_page{page_num}.pdf"
         pdf_link_path = os.path.join(training_dir, pdf_link_name)
@@ -1080,7 +1332,7 @@ async def process_pdf(pdf_info, args, client, pdf_filter=None):
             os.remove(pdf_link_path)
         # Create relative symlink from training to pdfs directory
         os.symlink(os.path.relpath(os.path.join(pdfs_dir, f"{pdf_id}_page{page_num}.pdf"), training_dir), pdf_link_path)
-        
+
         # Create soft link to markdown in claude_original/synthetic with new naming scheme
         claude_md_link_name = f"{pdf_id}_page{page_num}_pg1_repeat1.md"
         claude_md_link_path = os.path.join(claude_original_dir, claude_md_link_name)
@@ -1123,7 +1375,7 @@ async def process_pdf(pdf_info, args, client, pdf_filter=None):
         # If playwright rendering failed and was required, return None to skip this test
         if not args.skip_playwright and not render_success:
             return None
-        
+
         # Create soft link in bench_data/synthetic/ directory
         if playwright_pdf_path:
             synthetic_link_path = os.path.join(bench_synthetic_dir, playwright_pdf_filename)
@@ -1135,7 +1387,7 @@ async def process_pdf(pdf_info, args, client, pdf_filter=None):
 
         # Generate tests from the HTML content
         # Use the playwright rendered PDF path for tests
-        tests = generate_tests_from_html(html_content, pdf_id, page_num, verbose_table_testing)
+        tests = generate_tests_from_html(html_content, pdf_id, page_num, random_generator, verbose_table_testing)
 
         # Update the PDF path in all tests to use the playwright rendered PDF with the specified name prefix
         for test in tests:
@@ -1170,7 +1422,7 @@ async def main():
     # Configure logging to suppress httpx messages
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("httpcore").setLevel(logging.WARNING)
-    
+
     parser = argparse.ArgumentParser(description="Convert PDFs to HTML templates and render with Playwright")
     parser.add_argument("--input_list", required=True, help="Path to a file containing S3 paths or local paths to PDFs")
     parser.add_argument("--output_dir", required=True, help="Directory to store extracted pages and tests")
@@ -1196,7 +1448,7 @@ async def main():
 
     # Initialize async Claude client
     client = AsyncAnthropic(api_key=api_key)
-    
+
     # Initialize PDF filter if enabled
     pdf_filter = None
     if args.filter:
@@ -1208,25 +1460,30 @@ async def main():
         print("PDF filtering enabled")
 
     # Reservoir sampling implementation
+    random_gen = random.Random(42)
     pdf_paths = []
-    with open(args.input_list, "r") as f:
-        for i, line in enumerate(tqdm(f)):
-            line = line.strip()
-            if not line:
-                continue
 
-            if i < 100000:
-                pdf_paths.append(line)
-            else:
-                # Randomly replace elements with decreasing probability
-                j = random.randint(0, i)
-                if j < 100000:
-                    pdf_paths[j] = line
+    if os.path.isdir(args.input_list):
+        pdf_paths = list(glob.glob(os.path.join(args.input_list, "*.pdf"), recursive=True))
+    else:
+        with open(args.input_list, "r") as f:
+            for i, line in enumerate(tqdm(f)):
+                line = line.strip()
+                if not line:
+                    continue
+
+                if i < 100000:
+                    pdf_paths.append(line)
+                else:
+                    # Randomly replace elements with decreasing probability
+                    j = random_gen.randint(0, i)
+                    if j < 100000:
+                        pdf_paths[j] = line
 
     print(f"Found {len(pdf_paths)} PDF paths in input list")
 
     # Shuffle and limit to max_tests
-    random.shuffle(pdf_paths)
+    random_gen.shuffle(pdf_paths)
     pdf_paths = pdf_paths[: args.max_tests]
 
     # Initialize the JSONL file in bench_data folder with the specified name
@@ -1234,7 +1491,7 @@ async def main():
     os.makedirs(bench_data_dir, exist_ok=True)
     synthetic_json_path = os.path.join(bench_data_dir, f"{args.name}.jsonl")
     open(synthetic_json_path, "w").close()  # Create empty file
-    
+
     # Initialize the metadata JSONL file
     metadata_dir = os.path.join(args.output_dir, "metadata")
     os.makedirs(metadata_dir, exist_ok=True)
@@ -1261,25 +1518,21 @@ async def main():
                     with open(synthetic_json_path, "a") as f:
                         for test in result["tests"]:
                             f.write(json.dumps(test) + "\n")
-                    
+
                     # Write metadata mapping (pdf_id to source URL)
                     with open(metadata_json_path, "a") as f:
-                        metadata = {
-                            "pdf_id": result["pdf_id"],
-                            "source_url": result["pdf_path"],
-                            "page_number": result["page_number"]
-                        }
+                        metadata = {"pdf_id": result["pdf_id"], "source_url": result["pdf_path"], "page_number": result["page_number"]}
                         f.write(json.dumps(metadata) + "\n")
-                    
+
                     # Update counters
                     nonlocal test_counter
                     test_counter += len(result["tests"])
                     for test in result["tests"]:
                         test_type = test.get("type", "unknown")
                         test_types[test_type] += 1
-                    
+
                     print(f"Added {len(result['tests'])} tests from {result['pdf_id']}, total: {test_counter}")
-                
+
                 return result
         except Exception as e:
             print(f"Error processing {pdf_path}: {e}")
@@ -1289,32 +1542,28 @@ async def main():
     tasks = []
     for i, pdf_path in enumerate(pdf_paths):
         tasks.append(process_with_progress((pdf_path, i)))
-    
+
     # Run tasks with limited concurrency
     semaphore = asyncio.Semaphore(args.parallel)
-    
+
     async def bounded_task(task_coro):
         async with semaphore:
             return await task_coro
-    
+
     bounded_tasks = [bounded_task(task) for task in tasks]
-    
+
     # Process all tasks with progress bar
     pbar = tqdm(asyncio.as_completed(bounded_tasks), total=len(bounded_tasks), desc="Processing PDFs")
     for coro in pbar:
         result = await coro
         if result:
             results.append(result)
-        
+
         # Update progress bar with cost information
         cost_input = (total_input_tokens / 1_000_000) * 3.0  # $3 per million input tokens
         cost_output = (total_output_tokens / 1_000_000) * 15.0  # $15 per million output tokens
         total_cost = cost_input + cost_output
-        pbar.set_postfix({
-            'in_tokens': f'{total_input_tokens:,}',
-            'out_tokens': f'{total_output_tokens:,}', 
-            'cost': f'${total_cost:.2f}'
-        })
+        pbar.set_postfix({"in_tokens": f"{total_input_tokens:,}", "out_tokens": f"{total_output_tokens:,}", "cost": f"${total_cost:.2f}"})
 
     print(f"Generated {len(results)} HTML templates")
 
@@ -1333,7 +1582,7 @@ async def main():
         print("Test type distribution:")
         for test_type, count in test_types.items():
             print(f"  - {test_type}: {count} tests")
-    
+
     # Print final Claude API cost summary
     print("\nClaude Sonnet API Usage Summary:")
     print(f"  Total input tokens: {total_input_tokens:,}")

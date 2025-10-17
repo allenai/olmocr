@@ -27,6 +27,7 @@ filtered_items_prefilter/
 augraphy_cache/
 /*.html
 html_templates*/
+olmocr-synthmix*/
 scoreelo.csv
 debug.log
 birrpipeline-debug.log

@@ -46,7 +46,7 @@ def process_document(data, s3_client, template, output_dir):
     attributes = data.get("attributes", {})
     pdf_page_numbers = attributes.get("pdf_page_numbers", [])
     metadata = data.get("metadata", {})
-    
+
     # Extract additional fields for display
     source = data.get("source", "")
     added = data.get("added", "")
@@ -70,11 +70,11 @@ def process_document(data, s3_client, template, output_dir):
 
             # Escape only dangerous HTML characters, preserving curly braces for LaTeX
             # Don't escape curly braces {} as they're needed for LaTeX
-            page_text = page_text.replace('&', '&amp;')
-            page_text = page_text.replace('<', '&lt;')
-            page_text = page_text.replace('>', '&gt;')
-            page_text = page_text.replace('"', '&quot;')
-            page_text = page_text.replace("'", '&#x27;')
+            page_text = page_text.replace("&", "&amp;")
+            page_text = page_text.replace("<", "&lt;")
+            page_text = page_text.replace(">", "&gt;")
+            page_text = page_text.replace('"', "&quot;")
+            page_text = page_text.replace("'", "&#x27;")
 
             base64_image = render_pdf_to_base64webp(local_pdf.name, page_num)
 
@@ -103,18 +103,12 @@ def process_document(data, s3_client, template, output_dir):
         "tokens_in": metadata.get("total-input-tokens", ""),
         "tokens_out": metadata.get("total-output-tokens", ""),
         "olmocr_version": metadata.get("olmocr-version", ""),
-        "source_file": source_file
+        "source_file": source_file,
     }
-    
+
     # Render the HTML using the Jinja template
     try:
-        html_content = template.render(
-            id=id_, 
-            pages=pages, 
-            s3_link=s3_link,
-            metadata=display_metadata,
-            attributes=attributes
-        )
+        html_content = template.render(id=id_, pages=pages, s3_link=s3_link, metadata=display_metadata, attributes=attributes)
     except Exception as e:
         print(f"Error rendering HTML for document ID {id_}: {e}")
         return
@@ -137,7 +131,7 @@ def process_document_for_merge(data, s3_client):
     attributes = data.get("attributes", {})
     pdf_page_numbers = attributes.get("pdf_page_numbers", [])
     metadata = data.get("metadata", {})
-    
+
     # Extract additional fields for display
     source = data.get("source", "")
     added = data.get("added", "")
@@ -161,11 +155,11 @@ def process_document_for_merge(data, s3_client):
 
             # Escape only dangerous HTML characters, preserving curly braces for LaTeX
             # Don't escape curly braces {} as they're needed for LaTeX
-            page_text = page_text.replace('&', '&amp;')
-            page_text = page_text.replace('<', '&lt;')
-            page_text = page_text.replace('>', '&gt;')
-            page_text = page_text.replace('"', '&quot;')
-            page_text = page_text.replace("'", '&#x27;')
+            page_text = page_text.replace("&", "&amp;")
+            page_text = page_text.replace("<", "&lt;")
+            page_text = page_text.replace(">", "&gt;")
+            page_text = page_text.replace('"', "&quot;")
+            page_text = page_text.replace("'", "&#x27;")
 
             base64_image = render_pdf_to_base64webp(local_pdf.name, page_num)
 
@@ -194,16 +188,10 @@ def process_document_for_merge(data, s3_client):
         "tokens_in": metadata.get("total-input-tokens", ""),
         "tokens_out": metadata.get("total-output-tokens", ""),
         "olmocr_version": metadata.get("olmocr-version", ""),
-        "source_file": source_file
+        "source_file": source_file,
     }
-    
-    return {
-        "id": id_,
-        "pages": pages,
-        "s3_link": s3_link,
-        "metadata": display_metadata,
-        "attributes": attributes
-    }
+
+    return {"id": id_, "pages": pages, "s3_link": s3_link, "metadata": display_metadata, "attributes": attributes}
 
 
 def main(jsonl_paths, output_dir, template_path, s3_profile_name, merge=False):
@@ -248,7 +236,7 @@ def main(jsonl_paths, output_dir, template_path, s3_profile_name, merge=False):
         for jsonl_path in expanded_paths:
             documents = []
             print(f"Processing {jsonl_path}...")
-            
+
             # Process documents sequentially for each file
             with ThreadPoolExecutor() as executor:
                 futures = []
@@ -262,25 +250,25 @@ def main(jsonl_paths, output_dir, template_path, s3_profile_name, merge=False):
                         continue
                     future = executor.submit(process_document_for_merge, data, s3_client)
                     futures.append(future)
-                
+
                 # Collect results
                 for future in tqdm(as_completed(futures), total=len(futures), desc=f"Processing documents from {os.path.basename(jsonl_path)}"):
                     result = future.result()
                     if result:
                         documents.append(result)
-            
+
             if documents:
                 # Generate merged HTML
                 try:
                     html_content = template.render(documents=documents)
-                    
+
                     # Create output filename based on JSONL filename
                     jsonl_basename = os.path.basename(jsonl_path)
-                    if jsonl_basename.endswith('.jsonl'):
-                        output_filename = jsonl_basename[:-6] + '_merged.html'
+                    if jsonl_basename.endswith(".jsonl"):
+                        output_filename = jsonl_basename[:-6] + "_merged.html"
                     else:
-                        output_filename = jsonl_basename + '_merged.html'
-                    
+                        output_filename = jsonl_basename + "_merged.html"
+
                     output_path = os.path.join(output_dir, output_filename)
                     with open(output_path, "w", encoding="utf-8") as f:
                         f.write(html_content)
