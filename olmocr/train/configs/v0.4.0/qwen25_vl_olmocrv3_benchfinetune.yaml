@@ -6,7 +6,7 @@ run_name: qwen2.5-vl-7b-olmocrv3_benchfinetune
 
 # Model configuration
 model:
-  name: allenai/olmOCR-7B-0825
+  name: /data/models/qwen2.5-vl-7b-olmocrv3_1epoch_prompt_first_rotation-7951/
   trust_remote_code: true
   torch_dtype: bfloat16
   use_flash_attention: true
