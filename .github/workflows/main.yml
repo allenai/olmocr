@@ -187,7 +187,7 @@ jobs:
           echo "TAG=${GITHUB_REF#refs/tags/}" >> $GITHUB_ENV
 
       - name: Download package distribution files
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v6
         with:
           name: package
           path: dist
