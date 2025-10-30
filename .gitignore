@@ -11,6 +11,7 @@ sample200_vllm/*
 sample200_sglang/*
 pdelfin_testset/*
 localworkspace/*
+workspace/*
 math_data/*
 math_data_big/*
 gpt4otestset/*

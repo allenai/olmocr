@@ -20,6 +20,7 @@ from concurrent.futures.process import BrokenProcessPool
 from dataclasses import dataclass
 from functools import cache
 from io import BytesIO
+from typing import Optional
 from urllib.parse import urlparse
 
 import boto3
@@ -30,10 +31,12 @@ from PIL import Image
 from pypdf import PdfReader
 from tqdm import tqdm
 
+from olmocr.backends import BackendConfig, InferenceBackend, get_backend
 from olmocr.check import (
     check_poppler_version,
     check_torch_gpu_available,
 )
+from olmocr.config import PipelineConfig
 from olmocr.data.renderpdf import render_pdf_to_base64png
 from olmocr.filter.filter import Language, PdfFilter
 from olmocr.image_utils import convert_image_to_pdf_bytes, is_jpeg, is_png
@@ -85,8 +88,6 @@ pdf_s3 = boto3.client("s3")
 metrics = MetricsKeeper(window=60 * 5)
 tracker = WorkerTracker()
 
-pdf_render_max_workers = asyncio.BoundedSemaphore(int(float(os.environ.get("BEAKER_ASSIGNED_CPU_COUNT", max(1, multiprocessing.cpu_count() - 2)))))
-
 # Filter object, cached so it will only get loaded when/if you need it
 get_pdf_filter = cache(lambda: PdfFilter(languages_to_keep={Language.ENGLISH, None}, apply_download_spam_check=True, apply_form_check=True))
 
@@ -102,7 +103,7 @@ class PageResult:
     is_fallback: bool
 
 
-async def build_page_query(local_pdf_path: str, page: int, target_longest_image_dim: int, image_rotation: int = 0, model_name: str = "olmocr") -> dict:
+async def build_page_query(local_pdf_path: str, page: int, target_longest_image_dim: int, image_rotation: int = 0, model_name: str = "olmocr", custom_prompt: Optional[str] = None) -> dict:
     MAX_TOKENS = 8000
     assert image_rotation in [0, 90, 180, 270], "Invalid image rotation provided in build_page_query"
 
@@ -129,13 +130,16 @@ async def build_page_query(local_pdf_path: str, page: int, target_longest_image_
         # Encode the rotated image back to base64
         image_base64 = base64.b64encode(buffered.getvalue()).decode("utf-8")
 
+    # Use custom prompt if provided, otherwise use default
+    prompt_text = custom_prompt if custom_prompt is not None else build_no_anchoring_v4_yaml_prompt()
+
     return {
         "model": model_name,
         "messages": [
             {
                 "role": "user",
                 "content": [
-                    {"type": "text", "text": build_no_anchoring_v4_yaml_prompt()},
+                    {"type": "text", "text": prompt_text},
                     {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{image_base64}"}},
                 ],
             }
@@ -246,8 +250,16 @@ async def apost(url, json_data, api_key=None):
                 pass
 
 
-async def process_page(args, worker_id: int, pdf_orig_path: str, pdf_local_path: str, page_num: int) -> PageResult:
-    COMPLETION_URL = f"{args.server.rstrip('/')}/chat/completions"
+async def process_page(
+    args,
+    backend: InferenceBackend,
+    worker_id: int,
+    pdf_orig_path: str,
+    pdf_local_path: str,
+    page_num: int,
+    pdf_render_semaphore: asyncio.BoundedSemaphore,
+) -> PageResult:
+    COMPLETION_URL = f"{args.server.rstrip('/')}{backend.get_endpoint_path()}"
     MAX_RETRIES = args.max_page_retries
     MODEL_MAX_CONTEXT = 16384
     TEMPERATURE_BY_ATTEMPT = [0.1, 0.1, 0.2, 0.3, 0.5, 0.8, 0.9, 1.0]
@@ -259,21 +271,51 @@ async def process_page(args, worker_id: int, pdf_orig_path: str, pdf_local_path:
     while attempt < MAX_RETRIES:
         lookup_attempt = min(attempt, len(TEMPERATURE_BY_ATTEMPT) - 1)
 
-        query = await build_page_query(
-            pdf_local_path,
-            page_num,
-            args.target_longest_image_dim,
-            image_rotation=cumulative_rotation,
-            model_name=args.model,
-        )
-        # Change temperature as number of attempts increases to overcome repetition issues at expense of quality
-        query["temperature"] = TEMPERATURE_BY_ATTEMPT[lookup_attempt]
-
-        # Enable guided decoding regex if needed
-        if args.guided_decoding:
-            query["guided_regex"] = (
-                r"---\nprimary_language: (?:[a-z]{2}|null)\nis_rotation_valid: (?:True|False|true|false)\nrotation_correction: (?:0|90|180|270)\nis_table: (?:True|False|true|false)\nis_diagram: (?:True|False|true|false)\n(?:---|---\n[\s\S]+)"
+        # Render PDF page to base64 image
+        async with pdf_render_semaphore:
+            image_base64 = await asyncio.to_thread(
+                render_pdf_to_base64png,
+                pdf_local_path,
+                page_num,
+                target_longest_image_dim=args.target_longest_image_dim
             )
+
+        # Apply rotation if needed
+        if cumulative_rotation != 0:
+            image_bytes = base64.b64decode(image_base64)
+            with Image.open(BytesIO(image_bytes)) as img:
+                if cumulative_rotation == 90:
+                    tranpose = Image.Transpose.ROTATE_90
+                elif cumulative_rotation == 180:
+                    tranpose = Image.Transpose.ROTATE_180
+                else:
+                    tranpose = Image.Transpose.ROTATE_270
+
+                rotated_img = img.transpose(tranpose)
+
+                # Save the rotated image to a bytes buffer
+                buffered = BytesIO()
+                rotated_img.save(buffered, format="PNG")
+
+            # Encode the rotated image back to base64
+            image_base64 = base64.b64encode(buffered.getvalue()).decode("utf-8")
+
+        # Get prompt text
+        prompt_text = getattr(args, 'custom_prompt', None)
+        if prompt_text is None:
+            prompt_text = build_no_anchoring_v4_yaml_prompt()
+
+        # Build request using backend
+        temperature = TEMPERATURE_BY_ATTEMPT[lookup_attempt]
+        max_tokens = getattr(args, 'max_tokens', 8000)  # Default to 8000 if not specified
+        query = backend.build_request(
+            prompt=prompt_text,
+            base64_image=image_base64,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            guided_decoding=args.guided_decoding,
+            model=args.model,
+        )
 
         logger.debug(f"Built page query for {pdf_orig_path}-{page_num}")
 
@@ -296,18 +338,27 @@ async def process_page(args, worker_id: int, pdf_orig_path: str, pdf_local_path:
 
             base_response_data = json.loads(response_body)
 
-            if base_response_data["usage"]["total_tokens"] > MODEL_MAX_CONTEXT:
+            # Parse response using backend
+            model_response_markdown, input_tokens, output_tokens = backend.parse_response(base_response_data)
+
+            # Validate token count
+            if input_tokens + output_tokens > MODEL_MAX_CONTEXT:
                 raise ValueError(f"Response exceeded model_max_context of {MODEL_MAX_CONTEXT}, cannot use this response")
 
-            if base_response_data["choices"][0]["finish_reason"] != "stop":
-                raise ValueError("Response did not finish with reason code 'stop', cannot use this response")
+            # Check finish reason for vLLM-compatible responses
+            if "choices" in base_response_data and base_response_data["choices"][0].get("finish_reason") != "stop":
+                actual_finish_reason = base_response_data["choices"][0].get("finish_reason")
+                logger.warning(
+                    f"API response finished with reason='{actual_finish_reason}' (expected 'stop'). "
+                    f"Input tokens: {input_tokens}, Output tokens: {output_tokens}, "
+                    f"Total: {input_tokens + output_tokens}"
+                )
+                raise ValueError(f"Response did not finish with reason code 'stop' (got '{actual_finish_reason}'), cannot use this response")
 
             metrics.add_metrics(
-                server_input_tokens=base_response_data["usage"].get("prompt_tokens", 0),
-                server_output_tokens=base_response_data["usage"].get("completion_tokens", 0),
+                server_input_tokens=input_tokens,
+                server_output_tokens=output_tokens,
             )
-
-            model_response_markdown = base_response_data["choices"][0]["message"]["content"]
 
             parser = FrontMatterParser(front_matter_class=PageResponse)
             front_matter, text = parser._extract_front_matter_and_text(model_response_markdown)
@@ -328,8 +379,8 @@ async def process_page(args, worker_id: int, pdf_orig_path: str, pdf_local_path:
                 pdf_orig_path,
                 page_num,
                 page_response,
-                input_tokens=base_response_data["usage"].get("prompt_tokens", 0),
-                output_tokens=base_response_data["usage"].get("completion_tokens", 0),
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
                 is_fallback=False,
             )
         except (ConnectionError, OSError, asyncio.TimeoutError) as e:
@@ -377,7 +428,13 @@ async def process_page(args, worker_id: int, pdf_orig_path: str, pdf_local_path:
     )
 
 
-async def process_pdf(args, worker_id: int, pdf_orig_path: str):
+async def process_pdf(
+    args,
+    backend: InferenceBackend,
+    worker_id: int,
+    pdf_orig_path: str,
+    pdf_render_semaphore: asyncio.BoundedSemaphore,
+):
     with tempfile.NamedTemporaryFile("wb+", suffix=".pdf", delete=False) as tf:
         try:
             data = await asyncio.to_thread(lambda: get_s3_bytes_with_backoff(pdf_s3, pdf_orig_path))
@@ -417,7 +474,7 @@ async def process_pdf(args, worker_id: int, pdf_orig_path: str):
         try:
             async with asyncio.TaskGroup() as tg:
                 for page_num in range(1, num_pages + 1):
-                    task = tg.create_task(process_page(args, worker_id, pdf_orig_path, tf.name, page_num))
+                    task = tg.create_task(process_page(args, backend, worker_id, pdf_orig_path, tf.name, page_num, pdf_render_semaphore))
                     page_tasks.append(task)
 
             # Collect the results from the entire task group, assuming no exceptions
@@ -505,7 +562,14 @@ def build_dolma_document(pdf_orig_path, page_results):
     return dolma_doc
 
 
-async def worker(args, work_queue: WorkQueue, semaphore, worker_id):
+async def worker(
+    args,
+    backend: InferenceBackend,
+    work_queue: WorkQueue,
+    semaphore,
+    worker_id,
+    pdf_render_semaphore: asyncio.BoundedSemaphore,
+):
     while True:
         # Wait until allowed to proceed
         await semaphore.acquire()
@@ -522,7 +586,7 @@ async def worker(args, work_queue: WorkQueue, semaphore, worker_id):
 
         try:
             async with asyncio.TaskGroup() as tg:
-                dolma_tasks = [tg.create_task(process_pdf(args, worker_id, pdf)) for pdf in work_item.work_paths]
+                dolma_tasks = [tg.create_task(process_pdf(args, backend, worker_id, pdf, pdf_render_semaphore)) for pdf in work_item.work_paths]
                 logger.info(f"Created all tasks for {work_item.hash}")
 
             logger.info(f"Finished TaskGroup for worker on {work_item.hash}")
@@ -577,8 +641,13 @@ async def worker(args, work_queue: WorkQueue, semaphore, worker_id):
                         parsed = urlparse(source_file)
                         relative_path = parsed.path.lstrip("/")
                     else:
-                        # For local files, use the full path
-                        relative_path = source_file
+                        # For local files, extract just the parent directory name to avoid absolute path issues.
+                        # Bug fix: os.path.join(workspace, "markdown", "/absolute/path") discards workspace prefix.
+                        # Instead, extract parent dir: /path/to/pdfs/2008/file.pdf -> 2008/file.pdf
+                        # Result: markdown saved to workspace/markdown/2008/ instead of /path/to/pdfs/2008/
+                        parent_dir = os.path.basename(os.path.dirname(source_file))
+                        filename = os.path.basename(source_file)
+                        relative_path = os.path.join(parent_dir, filename) if parent_dir else filename
 
                     # Change the extension to .md
                     md_filename = os.path.splitext(os.path.basename(relative_path))[0] + ".md"
@@ -1075,71 +1144,69 @@ def print_stats(args, root_work_queue):
     print(f"Total tokens in long context documents: {long_context_tokens_total:,}")
 
 
-async def main():
-    parser = argparse.ArgumentParser(description="Manager for running millions of PDFs through a batch inference pipeline.")
-    parser.add_argument(
-        "workspace",
-        help="The filesystem path where work will be stored, can be a local folder, or an s3 path if coordinating work with many workers, s3://bucket/prefix/ ",
-    )
-    parser.add_argument(
-        "--pdfs",
-        nargs="*",
-        help="Path to add pdfs stored in s3 to the workspace, can be a glob path s3://bucket/prefix/*.pdf or path to file containing list of pdf paths",
-        default=None,
-    )
-    parser.add_argument(
-        "--model",
-        help="Path where the model is located, allenai/olmOCR-2-7B-1025-FP8 is the default, can be local, s3, or hugging face.",
-        default="allenai/olmOCR-2-7B-1025-FP8",
-    )
+def _config_to_args(config: PipelineConfig) -> argparse.Namespace:
+    """
+    Convert a PipelineConfig to an argparse.Namespace for internal use.
 
-    # More detailed config options, usually you shouldn't have to change these
-    parser.add_argument("--workspace_profile", help="S3 configuration profile for accessing the workspace", default=None)
-    parser.add_argument("--pdf_profile", help="S3 configuration profile for accessing the raw pdf documents", default=None)
-    parser.add_argument("--pages_per_group", type=int, default=argparse.SUPPRESS, help="Aiming for this many pdf pages per work item group")
-    parser.add_argument("--max_page_retries", type=int, default=8, help="Max number of times we will retry rendering a page")
-    parser.add_argument("--max_page_error_rate", type=float, default=0.004, help="Rate of allowable failed pages in a document, 1/250 by default")
-    parser.add_argument("--workers", type=int, default=20, help="Number of workers to run at a time")
-    parser.add_argument("--apply_filter", action="store_true", help="Apply basic filtering to English pdfs which are not forms, and not likely seo spam")
-    parser.add_argument("--stats", action="store_true", help="Instead of running any job, reports some statistics about the current workspace")
-    parser.add_argument("--markdown", action="store_true", help="Also write natural text to markdown files preserving the folder structure of the input pdfs")
-    parser.add_argument("--target_longest_image_dim", type=int, help="Dimension on longest side to use for rendering the pdf pages", default=1288)
-    parser.add_argument("--target_anchor_text_len", type=int, help="Maximum amount of anchor text to use (characters), not used for new models", default=-1)
-    parser.add_argument("--guided_decoding", action="store_true", help="Enable guided decoding for model YAML type outputs")
+    This allows the new programmatic API to work with existing internal code
+    that expects an args namespace object.
+    """
+    args = argparse.Namespace()
 
-    server_group = parser.add_argument_group("Server arguments, to specify where your VLLM inference engine is running")
-    server_group.add_argument(
-        "--server",
-        type=str,
-        help="URL of external vLLM (or other compatible provider) server (e.g., http://hostname:port/v1). If provided, skips spawning local vLLM instance",
-    )
-    server_group.add_argument("--api_key", type=str, default=None, help="API key for authenticated remote servers (e.g., DeepInfra)")
+    # Copy all attributes from config to args
+    for field_name in dir(config):
+        if not field_name.startswith('_'):
+            setattr(args, field_name, getattr(config, field_name))
 
-    vllm_group = parser.add_argument_group(
-        "VLLM arguments", "These arguments are passed to vLLM. Any unrecognized arguments are also automatically forwarded to vLLM."
-    )
-    vllm_group.add_argument(
-        "--gpu-memory-utilization", type=float, help="Fraction of VRAM vLLM may pre-allocate for KV-cache " "(passed through to vllm serve)."
-    )
-    vllm_group.add_argument("--max_model_len", type=int, default=16384, help="Upper bound (tokens) vLLM will allocate KV-cache for, lower if VLLM won't start")
-    vllm_group.add_argument("--tensor-parallel-size", "-tp", type=int, default=1, help="Tensor parallel size for vLLM")
-    vllm_group.add_argument("--data-parallel-size", "-dp", type=int, default=1, help="Data parallel size for vLLM")
-    vllm_group.add_argument("--port", type=int, default=30024, help="Port to use for the VLLM server")
+    # Handle attribute name mappings (CLI uses hyphens, Python uses underscores)
+    if hasattr(config, 'gpu_memory_utilization'):
+        args.gpu_memory_utilization = config.gpu_memory_utilization
 
-    # Beaker/job running stuff
-    beaker_group = parser.add_argument_group("beaker/cluster execution")
-    beaker_group.add_argument("--beaker", action="store_true", help="Submit this job to beaker instead of running locally")
-    beaker_group.add_argument("--beaker_workspace", help="Beaker workspace to submit to", default="ai2/olmocr")
-    beaker_group.add_argument(
-        "--beaker_cluster",
-        help="Beaker clusters you want to run on",
-        default=["ai2/jupiter", "ai2/ceres", "ai2/neptune", "ai2/saturn"],
-    )
-    beaker_group.add_argument("--beaker_gpus", type=int, default=1, help="Number of gpu replicas to run")
-    beaker_group.add_argument("--beaker_priority", type=str, default="normal", help="Beaker priority level for the job")
+    return args
 
-    args, unknown_args = parser.parse_known_args()
 
+async def run_pipeline(config: PipelineConfig, unknown_args: Optional[list[str]] = None) -> None:
+    """
+    Run the OlmoCR pipeline programmatically with a PipelineConfig.
+
+    This is the main entry point for using OlmoCR as a library rather than
+    through CLI subprocess calls. It provides a type-safe, composable API
+    while maintaining all the features of the CLI pipeline.
+
+    Args:
+        config: PipelineConfig object with all pipeline settings
+        unknown_args: Optional list of additional args to pass to vLLM
+
+    Returns:
+        None - Results are written to the workspace directory
+
+    Example:
+        >>> import asyncio
+        >>> from olmocr import run_pipeline, PipelineConfig
+        >>>
+        >>> config = PipelineConfig(
+        ...     workspace="./workspace",
+        ...     pdfs=["doc1.pdf", "doc2.pdf"],
+        ...     custom_prompt="Extract text from this legal document...",
+        ...     markdown=True,
+        ...     workers=10
+        ... )
+        >>> asyncio.run(run_pipeline(config))
+    """
+    # Convert config to args namespace for internal use
+    args = _config_to_args(config)
+
+    # Call the main pipeline implementation
+    await _main_impl(args, unknown_args or [])
+
+
+async def _main_impl(args: argparse.Namespace, unknown_args: list[str]) -> None:
+    """
+    Internal implementation of the pipeline logic.
+
+    This function contains the actual pipeline logic extracted from main()
+    so it can be called by both the CLI (main()) and the programmatic API (run_pipeline()).
+    """
     logger.info(
         "If you run out of GPU memory during start-up or get 'KV cache is larger than available memory' errors, retry with lower values, e.g. --gpu_memory_utilization 0.80  --max_model_len 16384"
     )
@@ -1216,7 +1283,7 @@ async def main():
                         logger.warning(f"File at {pdf_path} is not a valid PDF")
                 elif pdf_path.lower().endswith(".txt"):
                     logger.info(f"Loading file at {pdf_path} as list of paths")
-                    with open(pdf_path, "r") as f:
+                    with open(pdf_path, "r", encoding="utf-8", errors="replace") as f:
                         pdf_work_paths |= set(filter(None, (line.strip() for line in f)))
                 else:
                     raise ValueError(f"Unsupported file extension for {pdf_path}")
@@ -1266,19 +1333,33 @@ async def main():
 
     # If you get this far, then you are doing inference and need a GPU
     # check_sglang_version()
-    if use_internal_server:
+    # Only check for CUDA GPUs when using vLLM backend
+    if use_internal_server and args.backend == "vllm":
         check_torch_gpu_available()
 
     logger.info(f"Starting pipeline with PID {os.getpid()}")
 
+    # Instantiate the backend
+    backend = get_backend(args.backend)
+
     # Download the model before you do anything else
     if use_internal_server:
         model_name_or_path = await download_model(args.model)
-        args.server = f"http://localhost:{args.port}/v1"
-        args.model = "olmocr"  # Internal server always uses this name for the model, for supporting weird local model paths
-        logger.info(f"Using internal server at {args.server}")
+        backend_port = getattr(args, 'port', backend.get_default_port())
+
+        # vLLM uses /v1 prefix, MLX-VLM does not
+        if args.backend == "vllm":
+            args.server = f"http://localhost:{backend_port}/v1"
+            # vLLM serves the model under a custom name
+            args.model = "olmocr"
+        else:
+            args.server = f"http://localhost:{backend_port}"
+            # MLX-VLM needs the actual model path in requests (loads on first use)
+            args.model = model_name_or_path
+
+        logger.info(f"Using internal {args.backend} server at {args.server}")
     else:
-        logger.info(f"Using external server at {args.server}")
+        logger.info(f"Using external {args.backend} server at {args.server}")
         model_name_or_path = None
 
     # Initialize the work queue
@@ -1291,36 +1372,57 @@ async def main():
     # We only allow one worker to move forward with requests, until the server has no more requests in its queue
     # This lets us get full utilization by having many workers, but also to be outputting dolma docs as soon as possible
     # As soon as one worker is no longer saturating the gpu, the next one can start sending requests
-    semaphore = asyncio.Semaphore(1)
+    # For external APIs with high concurrency limits (e.g., DeepInfra), allow more concurrent work items
+    max_concurrent_work_items = getattr(args, 'max_concurrent_work_items', 1)
+    logger.info(f"Configured max_concurrent_work_items={max_concurrent_work_items} (allows {max_concurrent_work_items} workers to process work items simultaneously)")
+    semaphore = asyncio.Semaphore(max_concurrent_work_items)
 
-    # Start local vLLM instance if not using external one
-    vllm_server = None
+    # Start local inference server if not using external one
+    server_process = None
     if use_internal_server:
-        vllm_server = asyncio.create_task(vllm_server_host(model_name_or_path, args, semaphore, unknown_args))
+        backend_config = BackendConfig(
+            model_path=model_name_or_path,
+            port=backend_port,
+            gpu_memory_utilization=getattr(args, 'gpu_memory_utilization', None),
+            max_model_len=getattr(args, 'max_model_len', 16384),
+            tensor_parallel_size=getattr(args, 'tensor_parallel_size', 1),
+            data_parallel_size=getattr(args, 'data_parallel_size', 1),
+            mlx_quantization=getattr(args, 'mlx_quantization', None),
+            mlx_kv_bits=getattr(args, 'mlx_kv_bits', None),
+        )
+        server_process = await backend.start_server(backend_config, semaphore)
 
-    await vllm_server_ready(args)
+    # Wait for server to be ready
+    await backend.check_health(args.server, getattr(args, 'api_key', None))
 
     metrics_task = asyncio.create_task(metrics_reporter(work_queue))
+
+    # Create PDF render semaphore for this event loop
+    cpu_count = int(float(os.environ.get("BEAKER_ASSIGNED_CPU_COUNT", max(1, multiprocessing.cpu_count() - 2))))
+    pdf_render_semaphore = asyncio.BoundedSemaphore(cpu_count)
 
     # Create worker tasks to process the queue concurrently.
     worker_tasks = []
     for i in range(args.workers):
-        task = asyncio.create_task(worker(args, work_queue, semaphore, worker_id=i))
+        task = asyncio.create_task(worker(args, backend, work_queue, semaphore, worker_id=i, pdf_render_semaphore=pdf_render_semaphore))
         worker_tasks.append(task)
 
     # Wait for all worker tasks to finish
     await asyncio.gather(*worker_tasks)
 
-    # Cancel vLLM server if it was started
-    if vllm_server is not None:
-        vllm_server.cancel()
-    metrics_task.cancel()
+    # Terminate server process if it was started
+    if server_process is not None:
+        try:
+            server_process.terminate()
+            await asyncio.wait_for(server_process.wait(), timeout=10.0)
+        except asyncio.TimeoutError:
+            logger.warning("Server did not terminate within 10 seconds, killing it")
+            server_process.kill()
+        except Exception as e:
+            logger.warning(f"Error terminating server: {e}")
 
-    # Wait for cancelled tasks to complete
-    tasks_to_wait = [metrics_task]
-    if vllm_server is not None:
-        tasks_to_wait.append(vllm_server)
-    await asyncio.gather(*tasks_to_wait, return_exceptions=True)
+    metrics_task.cancel()
+    await asyncio.gather(metrics_task, return_exceptions=True)
 
     # Output final metrics summary
     metrics_summary = metrics.get_metrics_summary()
@@ -1373,5 +1475,111 @@ async def main():
     logger.info("Work done")
 
 
-if __name__ == "__main__":
+async def main():
+    parser = argparse.ArgumentParser(description="Manager for running millions of PDFs through a batch inference pipeline.")
+    parser.add_argument(
+        "workspace",
+        help="The filesystem path where work will be stored, can be a local folder, or an s3 path if coordinating work with many workers, s3://bucket/prefix/ ",
+    )
+    parser.add_argument(
+        "--pdfs",
+        nargs="*",
+        help="Path to add pdfs stored in s3 to the workspace, can be a glob path s3://bucket/prefix/*.pdf or path to file containing list of pdf paths",
+        default=None,
+    )
+    parser.add_argument(
+        "--model",
+        help="Path where the model is located, allenai/olmOCR-2-7B-1025-FP8 is the default, can be local, s3, or hugging face.",
+        default="allenai/olmOCR-2-7B-1025-FP8",
+    )
+    parser.add_argument(
+        "--backend",
+        choices=["vllm", "mlx-vlm"],
+        default="vllm",
+        help="Inference backend to use: 'vllm' for NVIDIA GPUs (Linux/Windows) or 'mlx-vlm' for Apple Silicon (macOS)",
+    )
+    parser.add_argument(
+        "--custom_prompt",
+        type=str,
+        default=None,
+        help="Custom prompt to use for OCR extraction. If not provided, uses the default prompt.",
+    )
+
+    # More detailed config options, usually you shouldn't have to change these
+    parser.add_argument("--workspace_profile", help="S3 configuration profile for accessing the workspace", default=None)
+    parser.add_argument("--pdf_profile", help="S3 configuration profile for accessing the raw pdf documents", default=None)
+    parser.add_argument("--pages_per_group", type=int, default=argparse.SUPPRESS, help="Aiming for this many pdf pages per work item group")
+    parser.add_argument("--max_page_retries", type=int, default=8, help="Max number of times we will retry rendering a page")
+    parser.add_argument("--max_page_error_rate", type=float, default=0.004, help="Rate of allowable failed pages in a document, 1/250 by default")
+    parser.add_argument("--workers", type=int, default=20, help="Number of workers to run at a time")
+    parser.add_argument("--max_concurrent_work_items", type=int, default=1, help="Max work items to process concurrently (1 for local GPU, higher for external APIs with high concurrency limits)")
+    parser.add_argument("--max_tokens", type=int, default=8000, help="Maximum tokens to generate per page (increase for dense documents, e.g., 12000 or 16000)")
+    parser.add_argument("--apply_filter", action="store_true", help="Apply basic filtering to English pdfs which are not forms, and not likely seo spam")
+    parser.add_argument("--stats", action="store_true", help="Instead of running any job, reports some statistics about the current workspace")
+    parser.add_argument("--markdown", action="store_true", help="Also write natural text to markdown files preserving the folder structure of the input pdfs")
+    parser.add_argument("--target_longest_image_dim", type=int, help="Dimension on longest side to use for rendering the pdf pages", default=1288)
+    parser.add_argument("--target_anchor_text_len", type=int, help="Maximum amount of anchor text to use (characters), not used for new models", default=-1)
+    parser.add_argument("--guided_decoding", action="store_true", help="Enable guided decoding for model YAML type outputs")
+
+    server_group = parser.add_argument_group("Server arguments, to specify where your VLLM inference engine is running")
+    server_group.add_argument(
+        "--server",
+        type=str,
+        help="URL of external vLLM (or other compatible provider) server (e.g., http://hostname:port/v1). If provided, skips spawning local vLLM instance",
+    )
+    server_group.add_argument("--api_key", type=str, default=None, help="API key for authenticated remote servers (e.g., DeepInfra)")
+
+    vllm_group = parser.add_argument_group(
+        "VLLM arguments", "These arguments are passed to vLLM. Any unrecognized arguments are also automatically forwarded to vLLM."
+    )
+    vllm_group.add_argument(
+        "--gpu-memory-utilization", type=float, help="Fraction of VRAM vLLM may pre-allocate for KV-cache " "(passed through to vllm serve)."
+    )
+    vllm_group.add_argument("--max_model_len", type=int, default=16384, help="Upper bound (tokens) vLLM will allocate KV-cache for, lower if VLLM won't start")
+    vllm_group.add_argument("--tensor-parallel-size", "-tp", type=int, default=1, help="Tensor parallel size for vLLM")
+    vllm_group.add_argument("--data-parallel-size", "-dp", type=int, default=1, help="Data parallel size for vLLM")
+    vllm_group.add_argument("--port", type=int, default=argparse.SUPPRESS, help="Port to use for the inference server (default: 30024 for vLLM, 8000 for MLX-VLM)")
+
+    mlx_group = parser.add_argument_group("MLX-VLM arguments", "These arguments are used for MLX-VLM backend on Apple Silicon")
+    mlx_group.add_argument(
+        "--mlx_quantization",
+        type=str,
+        default=None,
+        help='MLX model quantization level: "4bit", "8bit", "mixed_4_8", etc. Reduces memory usage.',
+    )
+    mlx_group.add_argument(
+        "--mlx_kv_bits",
+        type=int,
+        choices=[1, 2, 4, 8],
+        default=None,
+        help="MLX KV-cache quantization bits (1, 2, 4, or 8). Lower values save memory but reduce accuracy.",
+    )
+
+    # Beaker/job running stuff
+    beaker_group = parser.add_argument_group("beaker/cluster execution")
+    beaker_group.add_argument("--beaker", action="store_true", help="Submit this job to beaker instead of running locally")
+    beaker_group.add_argument("--beaker_workspace", help="Beaker workspace to submit to", default="ai2/olmocr")
+    beaker_group.add_argument(
+        "--beaker_cluster",
+        help="Beaker clusters you want to run on",
+        default=["ai2/jupiter", "ai2/ceres", "ai2/neptune", "ai2/saturn"],
+    )
+    beaker_group.add_argument("--beaker_gpus", type=int, default=1, help="Number of gpu replicas to run")
+    beaker_group.add_argument("--beaker_priority", type=str, default="normal", help="Beaker priority level for the job")
+
+    args, unknown_args = parser.parse_known_args()
+
+    # Call the shared implementation
+    await _main_impl(args, unknown_args)
+
+
+def cli():
+    """
+    Synchronous entry point for the olmocr CLI.
+    This wrapper is needed because setuptools entry points must be synchronous.
+    """
     asyncio.run(main())
+
+
+if __name__ == "__main__":
+    cli()

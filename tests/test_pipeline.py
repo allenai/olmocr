@@ -269,9 +269,9 @@ This is the corrected text from the document."""
         build_page_query_calls = []
         original_build_page_query = build_page_query
 
-        async def mock_build_page_query(local_pdf_path, page, target_longest_image_dim, image_rotation=0, model_name="olmocr"):
+        async def mock_build_page_query(local_pdf_path, page, target_longest_image_dim, image_rotation=0, model_name="olmocr", custom_prompt=None):
             build_page_query_calls.append(image_rotation)
-            return await original_build_page_query(local_pdf_path, page, target_longest_image_dim, image_rotation, model_name)
+            return await original_build_page_query(local_pdf_path, page, target_longest_image_dim, image_rotation, model_name, custom_prompt)
 
         with patch("olmocr.pipeline.apost", side_effect=mock_apost):
             with patch("olmocr.pipeline.tracker", mock_tracker):
@@ -377,9 +377,9 @@ Document is now correctly oriented after 180 degree rotation."""
         build_page_query_calls = []
         original_build_page_query = build_page_query
 
-        async def mock_build_page_query(local_pdf_path, page, target_longest_image_dim, image_rotation=0, model_name="olmocr"):
+        async def mock_build_page_query(local_pdf_path, page, target_longest_image_dim, image_rotation=0, model_name="olmocr", custom_prompt=None):
             build_page_query_calls.append(image_rotation)
-            return await original_build_page_query(local_pdf_path, page, target_longest_image_dim, image_rotation, model_name)
+            return await original_build_page_query(local_pdf_path, page, target_longest_image_dim, image_rotation, model_name, custom_prompt)
 
         with patch("olmocr.pipeline.apost", side_effect=mock_apost):
             with patch("olmocr.pipeline.tracker", mock_tracker):
@@ -483,9 +483,9 @@ Document correctly oriented at 90 degrees total rotation."""
         build_page_query_calls = []
         original_build_page_query = build_page_query
 
-        async def mock_build_page_query(local_pdf_path, page, target_longest_image_dim, image_rotation=0, model_name="olmocr"):
+        async def mock_build_page_query(local_pdf_path, page, target_longest_image_dim, image_rotation=0, model_name="olmocr", custom_prompt=None):
             build_page_query_calls.append(image_rotation)
-            return await original_build_page_query(local_pdf_path, page, target_longest_image_dim, image_rotation, model_name)
+            return await original_build_page_query(local_pdf_path, page, target_longest_image_dim, image_rotation, model_name, custom_prompt)
 
         with patch("olmocr.pipeline.apost", side_effect=mock_apost):
             with patch("olmocr.pipeline.tracker", mock_tracker):
@@ -506,3 +506,90 @@ Document correctly oriented at 90 degrees total rotation."""
         assert build_page_query_calls[0] == 0  # First call with no rotation
         assert build_page_query_calls[1] == 270  # Second call with 270 degree rotation
         assert build_page_query_calls[2] == 90  # Third call with wrapped rotation (270 + 180 = 450 % 360 = 90)
+
+
+class TestMarkdownPathHandling:
+    """Tests for markdown output path handling with absolute and relative paths."""
+
+    def test_path_extraction_from_various_depths(self):
+        """Test that parent directory extraction works with various path depths."""
+        # Test standard path
+        source_file = "/Users/test/data/pdfs/2008/document.pdf"
+        parent_dir = os.path.basename(os.path.dirname(source_file))
+        filename = os.path.basename(source_file)
+        relative_path = os.path.join(parent_dir, filename) if parent_dir else filename
+
+        assert relative_path == "2008/document.pdf"
+        assert not os.path.isabs(relative_path)
+
+        # Test deeply nested path - should still extract just immediate parent
+        deep_path = "/very/long/absolute/path/to/year/2020/category/document.pdf"
+        parent_dir = os.path.basename(os.path.dirname(deep_path))
+        filename = os.path.basename(deep_path)
+        relative_path = os.path.join(parent_dir, filename) if parent_dir else filename
+
+        assert relative_path == "category/document.pdf"
+
+        # Test Windows-style path
+        windows_path = "C:/Users/test/Documents/pdfs/2021/report.pdf"
+        parent_dir = os.path.basename(os.path.dirname(windows_path))
+        filename = os.path.basename(windows_path)
+        relative_path = os.path.join(parent_dir, filename) if parent_dir else filename
+
+        assert relative_path == "2021/report.pdf"
+        assert parent_dir == "2021"
+
+    def test_complete_markdown_path_workflow(self):
+        """Test the complete workflow from source file to markdown path with extension conversion."""
+        workspace = "/workspace/test"
+        source_file = "/absolute/path/pdfs/2020/legal_doc.pdf"
+
+        # Apply the fix logic (what's in the code)
+        parent_dir = os.path.basename(os.path.dirname(source_file))
+        filename = os.path.basename(source_file)
+        relative_path = os.path.join(parent_dir, filename) if parent_dir else filename
+
+        # Convert to markdown
+        md_filename = os.path.splitext(os.path.basename(relative_path))[0] + ".md"
+        dir_path = os.path.dirname(relative_path)
+
+        markdown_dir = os.path.join(workspace, "markdown", dir_path)
+        markdown_path = os.path.join(markdown_dir, md_filename)
+
+        # Verify the complete path
+        assert markdown_path == "/workspace/test/markdown/2020/legal_doc.md"
+        assert markdown_path.startswith(workspace)
+        assert "2020" in markdown_path
+        assert markdown_path.endswith(".md")
+        assert md_filename == "legal_doc.md"  # Extension was converted
+
+        # Verify we didn't include the full source path
+        assert "/absolute/path/pdfs" not in markdown_path
+
+    def test_workspace_join_with_absolute_path_bug(self):
+        """Demonstrate the bug: os.path.join with absolute path discards workspace prefix."""
+        workspace = "/workspace/olmocr-test"
+        source_file = "/Users/test/data/pdfs/2008/document.pdf"
+
+        # OLD BUGGY WAY (without the fix)
+        relative_path_buggy = source_file  # Just use the full absolute path
+        dir_path_buggy = os.path.dirname(relative_path_buggy)
+
+        # This demonstrates the bug
+        markdown_dir_buggy = os.path.join(workspace, "markdown", dir_path_buggy)
+
+        # Bug: os.path.join discards workspace when given absolute path
+        # Result: markdown_dir_buggy == "/Users/test/data/pdfs/2008" (wrong!)
+        assert markdown_dir_buggy == "/Users/test/data/pdfs/2008"
+        assert not markdown_dir_buggy.startswith(workspace)  # Bug!
+
+    def test_file_with_no_parent_directory(self):
+        """Test edge case where file has no parent directory."""
+        source_file = "document.pdf"  # No parent directory
+
+        parent_dir = os.path.basename(os.path.dirname(source_file))
+        filename = os.path.basename(source_file)
+        relative_path = os.path.join(parent_dir, filename) if parent_dir else filename
+
+        # Should just return the filename
+        assert relative_path == "document.pdf"

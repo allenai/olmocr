@@ -38,7 +38,7 @@ dependencies = [
   "boto3",
   "httpx",
   "torch>=2.7.0",
-  "transformers==4.55.2",
+  "transformers>=4.57.0",
   "beaker-py",
 ]
 license = {file = "LICENSE"}
@@ -49,9 +49,16 @@ Repository = "https://github.com/allenai/olmocr"
 Changelog = "https://github.com/allenai/olmocr/blob/main/CHANGELOG.md"
 # Documentation = "https://olmocr.readthedocs.io/"
 
+[project.scripts]
+olmocr = "olmocr.pipeline:cli"
+
 [project.optional-dependencies]
 gpu = [
     "vllm==0.11.0"
+]
+
+mlx = [
+    "mlx-vlm>=0.3.5",
 ]
 
 dev = [

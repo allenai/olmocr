@@ -7,6 +7,7 @@
 
 installation
 overview
+mlx-backend
 ```
 
 ```{toctree}
