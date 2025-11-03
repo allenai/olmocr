@@ -623,8 +623,6 @@ async def worker(args, work_queue: WorkQueue, semaphore, worker_id):
             await work_queue.mark_done(work_item)
         except Exception as e:
             logger.exception(f"Exception occurred while processing work_hash {work_item.hash}: {e}")
-        finally:
-            semaphore.release()
 
 
 async def vllm_server_task(model_name_or_path, args, semaphore, unknown_args=None):
