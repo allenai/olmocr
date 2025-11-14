@@ -207,3 +207,9 @@ class TestRenderedEquationComparison(unittest.TestCase):
         model_b = render_equation("C_T \\left(u^T_n X^{\\text{Test}}_n,\\overline{ \\text{x}}^{\\text{Test}}\\right)", use_cache=False)
         self.assertTrue(compare_rendered_equations(ref, model_a))
         self.assertTrue(compare_rendered_equations(ref, model_b))
+
+    def test_viks_equation(self):
+        eq1 = render_equation("s_{r,s}=\\begin{cases} 2 \\text{ if } r-s=2,4 \\text{ mod 4},\\\\ 1 \\text{ if } r-s=1,3 \\text{ mod 4}. \\end{cases}", use_cache=False)
+        eq2 = render_equation("s_{r,s}=\\begin{cases} 2 & \\text{if } r-s=2,4 \\text{ mod } 4, \\\\ 1 & \\text{if } r-s=1,3 \\text{ mod } 4. \\end{cases}", use_cache=False)
+        self.assertTrue(compare_rendered_equations(eq1, eq2))
+ 

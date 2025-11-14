@@ -22,7 +22,7 @@ import threading
 import unittest
 import weakref
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import List, Optional
 
 from playwright.sync_api import Error as PlaywrightError
@@ -128,7 +128,7 @@ equation_cache = EquationCache()
 # --- End SQLite Cache Implementation ---
 
 
-@dataclass
+@dataclass(frozen=True)
 class BoundingBox:
     x: float
     y: float
@@ -136,13 +136,13 @@ class BoundingBox:
     height: float
 
 
-@dataclass
+@dataclass(frozen=True)
 class SpanInfo:
     text: str
     bounding_box: BoundingBox
 
 
-@dataclass
+@dataclass(frozen=True)
 class RenderedEquation:
     mathml: str
     spans: List[SpanInfo]
@@ -443,8 +443,9 @@ def compare_rendered_equations(reference: RenderedEquation, hypothesis: Rendered
             print(mathml)
             return mathml
 
+    # Filters out all spaces, include unicode zero and partial width spaces
     def normalize(s: str) -> str:
-        return re.sub(r"\s+", "", s)
+        return re.sub(r"[\s\u200a-\u200d\u2060\ufeff]+", "", s, flags=re.UNICODE)
 
     reference_inner = normalize(extract_inner(reference.mathml))
     hypothesis_inner = normalize(extract_inner(hypothesis.mathml))
@@ -452,8 +453,10 @@ def compare_rendered_equations(reference: RenderedEquation, hypothesis: Rendered
         return True
 
     H, R = reference.spans, hypothesis.spans
-    H = [span for span in H if span.text != "\u200b"]
-    R = [span for span in R if span.text != "\u200b"]
+
+    # Filter out any whitespace only spans and remove whitespace from the spans 
+    H = [replace(span, text=normalize(span.text)) for span in H if normalize(span.text)]
+    R = [replace(span, text=normalize(span.text)) for span in R if normalize(span.text)]
 
     def expand_span_info(span_info: SpanInfo) -> list[SpanInfo]:
         total_elems = len(span_info.text)
