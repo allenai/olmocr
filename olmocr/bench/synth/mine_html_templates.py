@@ -10,6 +10,7 @@ import subprocess
 import uuid
 import glob
 import base64
+import tempfile
 import io
 from collections import defaultdict
 from typing import Dict, List
@@ -54,6 +55,48 @@ SUBSCRIPT_MAP = {
     "k": "ₖ", "l": "ₗ", "m": "ₘ", "n": "ₙ", "p": "ₚ",
     "s": "ₛ", "t": "ₜ"
 }
+
+async def call_claude(
+    client: AsyncAnthropic,
+    *,
+    max_retries: int = 10,
+    initial_backoff: float = 10,
+    **kwargs,
+):
+    """Call Claude with exponential backoff when the service is overloaded."""
+    delay = initial_backoff
+    for attempt in range(1, max_retries + 1):
+        try:
+            return await client.messages.create(**kwargs)
+        except Exception as error:
+            if not _is_overloaded_error(error) or attempt == max_retries:
+                raise
+
+            await asyncio.sleep(delay)
+            delay *= 2
+
+
+async def claude_stream(
+    client: AsyncAnthropic,
+    *,
+    max_retries: int = 10,
+    initial_backoff: float = 10,
+    **kwargs,
+):
+    """Call Claude streaming endpoint and return final message with overload retries."""
+    delay = initial_backoff
+    for attempt in range(1, max_retries + 1):
+        try:
+            async with client.messages.stream(**kwargs) as stream:
+                async for _ in stream:
+                    pass
+                return await stream.get_final_message()
+        except Exception as error:
+            if not _is_overloaded_error(error) or attempt == max_retries:
+                raise
+
+            await asyncio.sleep(delay)
+            delay *= 2
 
 
 def convert_superscripts_subscripts(element):
@@ -419,10 +462,57 @@ async def generate_html_from_image(client, image_base64):
     png_width, png_height = get_png_dimensions_from_base64(image_base64)
 
     try:
+        # Step 0: Check that the orientation of the original document is right-side-up. If not, we will
+        # skip this page, to keep the code simple
+        orientation_response = await call_claude(
+            client,
+            model="claude-sonnet-4-5-20250929",
+            max_tokens=1000,
+            temperature=0,
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": image_base64}},
+                        {
+                            "type": "text",
+                            "text": "Please analyze this document image and determine its orientation.\n\n"
+                            "Is this document right-side-up (correctly oriented), or is it rotated?\n\n"
+                            "Make your decision based on the main document contents that takes up most of the page area.\n\n"
+                            "Respond with ONLY one of the following:\n"
+                            "- RIGHT_SIDE_UP: The document is correctly oriented and readable\n"
+                            "- ROTATED_90: The document is rotated 90 degrees clockwise\n"
+                            "- ROTATED_180: The document is upside down (rotated 180 degrees)\n"
+                            "- ROTATED_270: The document is rotated 270 degrees clockwise (90 degrees counter-clockwise)\n"
+                            "- UNCLEAR: Cannot determine orientation (e.g., blank page, purely graphical content)\n\n"
+                            "Important: Only respond with one of these exact terms, nothing else.",
+                        },
+                    ],
+                }
+            ],
+        )
+
+        # Extract orientation from response
+        orientation_text = ""
+        for content in orientation_response.content:
+            if content.type == "text":
+                orientation_text += content.text.strip()
+
+        # Track token usage from orientation check
+        if hasattr(orientation_response, "usage"):
+            total_input_tokens += orientation_response.usage.input_tokens
+            total_output_tokens += orientation_response.usage.output_tokens
+
+        # Check orientation result
+        if "RIGHT_SIDE_UP" not in orientation_text:
+            print(f"Skipping page due to orientation: {orientation_text}")
+            return None
+
         # Step 1: Initial analysis and column detection
-        analysis_response = await client.messages.create(
-            model="claude-sonnet-4-20250514",
-            max_tokens=2000,
+        analysis_response = await call_claude(
+            client,
+            model="claude-sonnet-4-5-20250929",
+            max_tokens=20000,
             temperature=0.1,
             messages=[
                 {
@@ -443,29 +533,26 @@ async def generate_html_from_image(client, image_base64):
             ],
         )
 
-        # Step 1a. Get the bounding boxes of any figures directly in a separate request
-        bboxes = detect_figures_with_claude(image_base64, png_width, png_height)
+        # Check if response was complete
+        if hasattr(analysis_response, "stop_reason") and analysis_response.stop_reason != "end_turn":
+            print(f"Warning: Analysis response incomplete (stop_reason: {analysis_response.stop_reason})")
+            return None
 
         analysis_text = ""
         for content in analysis_response.content:
             if content.type == "text":
                 analysis_text += content.text
 
-        if len(bboxes) > 0:
-            analysis_text += "\n\nAdditionally, you can find the following images and figures which have been detected in the original document, along with their descriptions and coordinates:\n"
-
-            for bbox in bboxes:
-                analysis_text += bbox.model_dump_json() + "\n"
-        
         # Track token usage from first API call
-        if hasattr(analysis_response, 'usage'):
+        if hasattr(analysis_response, "usage"):
             total_input_tokens += analysis_response.usage.input_tokens
             total_output_tokens += analysis_response.usage.output_tokens
 
         # Step 2: Initial HTML generation with detailed layout instructions
-        initial_response = await client.messages.create(
-            model="claude-sonnet-4-20250514",
-            max_tokens=6000,
+        initial_response = await call_claude(
+            client,
+            model="claude-sonnet-4-5-20250929",
+            max_tokens=20000,
             temperature=0.2,
             messages=[
                 {
@@ -479,7 +566,7 @@ async def generate_html_from_image(client, image_base64):
                             "Important requirements:\n"
                             "1. Use appropriate HTML tags for elements like headings, paragraphs, lists, tables, etc.\n"
                             "2. Use the <header> and <footer> tags to represent content at the top/bottom which would not normally be part of the main content, such as page numbers, etc.\n"
-                            "3. Use a placeholder <div> tag with class 'image' which will render as a grey box with black outline to make sure images have their original size, shape, and position on the page. Include an alt-text of the original image as a 'data-description' attribute on the tag. Include 'data-x1', 'data-y1', 'data-x2', 'data-y2' attributes which specify where the image was found in the original document.\n"
+                            "3. Use a placeholder <div> tag with class 'image' which will render as a grey box with black outline to make sure images have their original size, shape, and position on the page. Include an alt-text of the original image as a 'data-description' attribute on the tag. Include 'data-x', 'data-y', 'data-width', 'data-height' attributes which specify where the image was found in the original document.\n"
                             "4. Render any math equations and Latex inline using either \\[ \\] or \\( \\) delimeters.\n"
                             "5. CRITICAL: If the document has a multi-column layout, you MUST preserve the exact same number of columns in your HTML. Use CSS flexbox or grid to create the columns.\n"
                             "6. Focus on creating valid, accessible HTML that preserves the appearance and formatting of the original page as closely as possible.\n"
@@ -492,29 +579,138 @@ async def generate_html_from_image(client, image_base64):
             ],
         )
 
+        # Check if response was complete
+        if hasattr(initial_response, "stop_reason") and initial_response.stop_reason != "end_turn":
+            print(f"Warning: Initial HTML response incomplete (stop_reason: {initial_response.stop_reason})")
+            return None
+
         # Extract initial HTML
-        initial_html = ""
+        initial_html_text = ""
         for content in initial_response.content:
             if content.type == "text":
-                initial_html += content.text
-        
+                initial_html_text += content.text
+
         # Track token usage from second API call
-        if hasattr(initial_response, 'usage'):
+        if hasattr(initial_response, "usage"):
             total_input_tokens += initial_response.usage.input_tokens
             total_output_tokens += initial_response.usage.output_tokens
 
-        # Extract the HTML from the code block
-        html_content = extract_code_block(initial_html)
-        
-        if html_content:
-            # Step 3: Embed extracted image regions into the HTML
-            html_content = embed_image_regions_in_html(html_content, image_base64)
-        
-        return html_content
+        initial_html = extract_code_block(initial_html_text)
+        if not initial_html:
+            print("Warning: No HTML code block found in initial response")
+            return None
+
+        # Step 3: Render the initial HTML to PDF and then back to PNG for comparison
+        # Create a temporary PDF file
+        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp_pdf:
+            tmp_pdf_path = tmp_pdf.name
+
+        try:
+            # Render HTML to PDF using existing function
+            render_success = await render_pdf_with_playwright(initial_html, tmp_pdf_path, png_width, png_height)
+
+            if not render_success:
+                print("Warning: Failed to render initial HTML to PDF for refinement")
+                return None
+
+            # Convert PDF back to PNG
+            rendered_image_base64 = render_pdf_to_base64png(tmp_pdf_path, 1, max(png_width, png_height))
+
+            if not rendered_image_base64:
+                print("Warning: Failed to convert rendered PDF to PNG for refinement")
+                return None
+
+            # We are going to add some stuff to the prompt conditioned on if tables need to be corrected or not
+            extra_table_fixing_instructions = ""
+
+            # Check the tables, if they are non-rectangular, we can apply one more correction pass on them
+            table_data = parse_html_tables(initial_html)
+
+            # if any(not table.is_rectangular for table in table_data):
+            #     extra_table_fixing_instructions = (
+            #         "Important: I've noticed that in the HTML table code, some of the columns/rows are not aligned right. "
+            #         "Please work extra hard to make sure the table columns are correctly lined up as in the original document. "
+            #         "You can add HTML comments as you output the table to help keep track of the current row and column if needed.\n"
+            #     )
+
+            # Step 4: Refinement - Show both images to Claude and ask for corrections
+            refinement_response = await claude_stream(
+                client,
+                model="claude-sonnet-4-5-20250929",
+                max_tokens=40000,
+                temperature=1.0,
+                thinking={"type": "enabled", "budget_tokens": 12000},
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": "I'm going to show you two images:\n1. The original document\n2. How the HTML I generated renders\n\nPlease compare them carefully and provide a revised version of the HTML that better matches the original.",
+                            },
+                            {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": image_base64}},
+                            {"type": "text", "text": "Above is the ORIGINAL document."},
+                            {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": rendered_image_base64}},
+                            {"type": "text", "text": "Above is how my HTML currently renders."},
+                            {
+                                "type": "text",
+                                "text": f"Here is the current HTML code:\n\n```html\n{initial_html}\n```\n\n"
+                                "Please analyze the differences between the original document and the rendered version. Focus on:\n"
+                                "1. Layout issues - are columns preserved correctly?\n"
+                                "2. Positioning - are elements in the right place?\n"
+                                "3. Spacing - are margins, padding, and spacing between elements correct?\n"
+                                "4. Occlusion - is any important content hidden or overlapping?\n"
+                                "5. Text formatting - are fonts, sizes, and styles appropriate?\n"
+                                "6. Tables - are the headers on tables are aligned with the correct corresponding columns?\n"
+                                f"{extra_table_fixing_instructions}"
+                                f"The webpage will be viewed at {png_width}x{png_height} pixels.\n\n"
+                                "Provide a REVISED version of the HTML that corrects any issues you identified. "
+                                "Make sure all important elements are visible and the layout matches the original as closely as possible.\n"
+                                "Output the complete revised HTML in a ```html code block.",
+                            },
+                        ],
+                    }
+                ],
+            )
+
+            # Check if refinement response was complete
+            if hasattr(refinement_response, "stop_reason") and refinement_response.stop_reason != "end_turn":
+                print(f"Warning: Refinement response incomplete (stop_reason: {refinement_response.stop_reason})")
+                # Return initial HTML as fallback since it was complete
+                return initial_html
+
+            # Extract refined HTML
+            refined_html_text = ""
+            for content in refinement_response.content:
+                if content.type == "text":
+                    refined_html_text += content.text
+
+            # Track token usage from refinement API call
+            if hasattr(refinement_response, "usage"):
+                total_input_tokens += refinement_response.usage.input_tokens
+                total_output_tokens += refinement_response.usage.output_tokens
+
+            refined_html = extract_code_block(refined_html_text)
+            final_html = refined_html if refined_html else initial_html
+
+            # Check the tables, if they are non-rectangular, we can apply one more correction pass on them
+            # table_data = parse_html_tables(final_html)
+
+            # if any(not table.is_rectangular for table in table_data):
+            #     print("Table not rectangular, aborting")
+            #     return None
+
+            # Return refined HTML if available, otherwise return initial HTML
+            return final_html
+
+        finally:
+            # Clean up temporary PDF file
+            if os.path.exists(tmp_pdf_path):
+                os.remove(tmp_pdf_path)
+
     except Exception as e:
         print(f"Error calling Claude API: {e}")
         return None
-
 
 def extract_page_from_pdf(input_path, output_path, page_num):
     """
