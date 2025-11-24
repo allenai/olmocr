@@ -58,6 +58,16 @@ get_pdf_filter = cache(lambda: PdfFilter(languages_to_keep={Language.ENGLISH, No
 def _split_and_sanitize_path(path_str: str) -> list[str]:
     """
     Break a path into safe components, removing any attempts to traverse upwards.
+
+    This function normalises path separators, removes parent directory references (..),
+    current directory references (.), empty segments, and colons to create a safe
+    list of path components.
+
+    Args:
+        path_str: The path string to split and sanitise.
+
+    Returns:
+        A list of sanitised path components. Returns an empty list if path_str is empty.
     """
 
     if not path_str:
@@ -82,8 +92,26 @@ def _split_and_sanitize_path(path_str: str) -> list[str]:
 def derive_markdown_relative_path(source_file: str) -> str:
     """
     Return a workspace-safe relative path for a markdown export based on the source file.
-    Absolute paths are re rooted under an `absolute/` prefix so that outputs never escape
-    the workspace directory.
+
+    This function ensures that markdown outputs are always contained within the workspace
+    directory by converting absolute paths to relative paths prefixed with `absolute/`.
+    It handles local paths (both Unix and Windows-style), S3 paths, and prevents directory
+    traversal attacks.
+
+    Args:
+        source_file: The source file path, which can be:
+            - A relative path (e.g., "docs/example.pdf")
+            - An absolute Unix path (e.g., "/home/user/docs/example.pdf")
+            - A Windows-style absolute path (e.g., "C:\\data\\example.pdf")
+            - An S3 path (e.g., "s3://bucket/documents/example.pdf")
+
+    Returns:
+        A workspace-safe relative path. Absolute paths are prefixed with "absolute/",
+        and all paths are sanitised to prevent directory traversal. Examples:
+            - "docs/example.pdf" -> "docs/example.pdf"
+            - "/home/user/docs/example.pdf" -> "absolute/home/user/docs/example.pdf"
+            - "C:\\data\\example.pdf" -> "absolute/C/data/example.pdf"
+            - "s3://bucket/documents/example.pdf" -> "documents/example.pdf"
     """
 
     # S3 paths were already relative to the bucket path; just sanitise components.
