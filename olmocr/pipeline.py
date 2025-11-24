@@ -97,11 +97,28 @@ def derive_markdown_relative_path(source_file: str) -> str:
         return os.path.join(*parts)
 
     normalized = source_file.replace("\\", os.sep)
+    
+    # Detect Windows-style absolute paths (e.g., C:\path or C:/path) BEFORE normpath
+    # This works even on Linux where os.path.isabs() doesn't recognize Windows paths
+    # Check if path starts with a drive letter pattern (e.g., "C:" or "c:")
+    is_windows_absolute = (
+        len(normalized) >= 3
+        and normalized[0].isalpha()
+        and normalized[1] == ":"
+        and normalized[2] in (os.sep, "/", "\\")
+    )
+    
     normalized = os.path.normpath(normalized)
-
-    if os.path.isabs(normalized):
-        abs_path = os.path.abspath(normalized)
+    
+    if os.path.isabs(normalized) or is_windows_absolute:
+        abs_path = os.path.abspath(normalized) if not is_windows_absolute else normalized
         drive, tail = os.path.splitdrive(abs_path)
+        
+        # On Linux, splitdrive won't detect Windows drives, so check manually
+        if not drive and is_windows_absolute:
+            drive = abs_path[0] + ":"
+            tail = abs_path[3:] if len(abs_path) > 3 else ""
+        
         tail = tail.lstrip(os.sep)
         parts = _split_and_sanitize_path(tail)
         if drive:
