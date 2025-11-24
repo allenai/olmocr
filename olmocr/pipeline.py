@@ -51,6 +51,73 @@ from olmocr.s3_utils import (
 from olmocr.train.dataloader import FrontMatterParser
 from olmocr.version import VERSION
 from olmocr.work_queue import LocalBackend, S3Backend, WorkQueue
+# Filter object, cached so it will only get loaded when/if you need it
+get_pdf_filter = cache(lambda: PdfFilter(languages_to_keep={Language.ENGLISH, None}, apply_download_spam_check=True, apply_form_check=True))
+
+
+def _split_and_sanitize_path(path_str: str) -> list[str]:
+    """
+    Break a path into safe components, removing any attempts to traverse upwards.
+    """
+
+    if not path_str:
+        return []
+
+    normalized = path_str.replace("\\", os.sep)
+    parts = []
+
+    for part in normalized.split(os.sep):
+        if not part or part in (".", os.curdir):
+            continue
+        if part in ("..", os.pardir):
+            continue
+
+        cleaned = part.replace(":", "")
+        if cleaned:
+            parts.append(cleaned)
+
+    return parts
+
+
+def derive_markdown_relative_path(source_file: str) -> str:
+    """
+    Return a workspace-safe relative path for a markdown export based on the source file.
+    Absolute paths are re rooted under an `absolute/` prefix so that outputs never escape
+    the workspace directory.
+    """
+
+    # S3 paths were already relative to the bucket path; just sanitise components.
+    if source_file.startswith("s3://"):
+        parsed = urlparse(source_file)
+        relative = parsed.path.lstrip("/")
+        parts = _split_and_sanitize_path(relative)
+        if not parts:
+            digest = hashlib.sha1(source_file.encode("utf-8")).hexdigest()[:12]
+            parts = [digest]
+        return os.path.join(*parts)
+
+    normalized = source_file.replace("\\", os.sep)
+    normalized = os.path.normpath(normalized)
+
+    if os.path.isabs(normalized):
+        abs_path = os.path.abspath(normalized)
+        drive, tail = os.path.splitdrive(abs_path)
+        tail = tail.lstrip(os.sep)
+        parts = _split_and_sanitize_path(tail)
+        if drive:
+            parts.insert(0, drive.replace(":", ""))
+        prefix = ["absolute"]
+        if parts:
+            prefix.extend(parts)
+        else:
+            prefix.append(hashlib.sha1(abs_path.encode("utf-8")).hexdigest()[:12])
+        return os.path.join(*prefix)
+
+    parts = _split_and_sanitize_path(normalized)
+    if not parts:
+        digest = hashlib.sha1(normalized.encode("utf-8")).hexdigest()[:12]
+        parts = [digest]
+    return os.path.join(*parts)
 
 # Initialize logger
 logger = logging.getLogger(__name__)
@@ -578,14 +645,7 @@ async def worker(args, work_queue: WorkQueue, semaphore, worker_id):
                     source_file = doc["metadata"]["Source-File"]
                     natural_text = doc["text"]
 
-                    # Create the output markdown path that preserves the folder structure
-                    if source_file.startswith("s3://"):
-                        # Extract the path after the bucket name for S3 sources
-                        parsed = urlparse(source_file)
-                        relative_path = parsed.path.lstrip("/")
-                    else:
-                        # For local files, use the full path
-                        relative_path = source_file
+                    relative_path = derive_markdown_relative_path(source_file)
 
                     # Change the extension to .md
                     md_filename = os.path.splitext(os.path.basename(relative_path))[0] + ".md"
