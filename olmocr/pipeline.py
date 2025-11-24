@@ -51,6 +51,7 @@ from olmocr.s3_utils import (
 from olmocr.train.dataloader import FrontMatterParser
 from olmocr.version import VERSION
 from olmocr.work_queue import LocalBackend, S3Backend, WorkQueue
+
 # Filter object, cached so it will only get loaded when/if you need it
 get_pdf_filter = cache(lambda: PdfFilter(languages_to_keep={Language.ENGLISH, None}, apply_download_spam_check=True, apply_form_check=True))
 
@@ -125,28 +126,23 @@ def derive_markdown_relative_path(source_file: str) -> str:
         return os.path.join(*parts)
 
     normalized = source_file.replace("\\", os.sep)
-    
+
     # Detect Windows-style absolute paths (e.g., C:\path or C:/path) BEFORE normpath
     # This works even on Linux where os.path.isabs() doesn't recognize Windows paths
     # Check if path starts with a drive letter pattern (e.g., "C:" or "c:")
-    is_windows_absolute = (
-        len(normalized) >= 3
-        and normalized[0].isalpha()
-        and normalized[1] == ":"
-        and normalized[2] in (os.sep, "/", "\\")
-    )
-    
+    is_windows_absolute = len(normalized) >= 3 and normalized[0].isalpha() and normalized[1] == ":" and normalized[2] in (os.sep, "/", "\\")
+
     normalized = os.path.normpath(normalized)
-    
+
     if os.path.isabs(normalized) or is_windows_absolute:
         abs_path = os.path.abspath(normalized) if not is_windows_absolute else normalized
         drive, tail = os.path.splitdrive(abs_path)
-        
+
         # On Linux, splitdrive won't detect Windows drives, so check manually
         if not drive and is_windows_absolute:
             drive = abs_path[0] + ":"
             tail = abs_path[3:] if len(abs_path) > 3 else ""
-        
+
         tail = tail.lstrip(os.sep)
         parts = _split_and_sanitize_path(tail)
         if drive:
@@ -163,6 +159,7 @@ def derive_markdown_relative_path(source_file: str) -> str:
         digest = hashlib.sha1(normalized.encode("utf-8")).hexdigest()[:12]
         parts = [digest]
     return os.path.join(*parts)
+
 
 # Initialize logger
 logger = logging.getLogger(__name__)
