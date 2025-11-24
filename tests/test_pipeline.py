@@ -408,35 +408,6 @@ Document is now correctly oriented after 180 degree rotation."""
         mock_tracker.track_work.assert_any_call(0, "test-cumulative-rotation.pdf-1", "started")
         mock_tracker.track_work.assert_any_call(0, "test-cumulative-rotation.pdf-1", "finished")
 
-
-class TestMarkdownPathDerivation:
-    def test_relative_path_preserved(self):
-        result = derive_markdown_relative_path("tests/gnarly_pdfs/sample.pdf")
-        assert result == os.path.join("tests", "gnarly_pdfs", "sample.pdf")
-
-    def test_absolute_path_prefixed(self, tmp_path):
-        absolute_pdf = tmp_path / "docs" / "example.pdf"
-        absolute_pdf.parent.mkdir(parents=True, exist_ok=True)
-        absolute_pdf.touch()
-
-        result = derive_markdown_relative_path(str(absolute_pdf))
-        assert result.startswith(os.path.join("absolute", "tmp"))
-        assert result.endswith(os.path.join("docs", "example.pdf"))
-
-    def test_windows_style_path(self):
-        path = r"C:\data\reports\demo.pdf"
-        result = derive_markdown_relative_path(path)
-        assert result.startswith(os.path.join("absolute", "C"))
-        assert result.endswith(os.path.join("data", "reports", "demo.pdf"))
-
-    def test_parent_segments_removed(self):
-        result = derive_markdown_relative_path("../outside/../doc.pdf")
-        assert result == "doc.pdf"
-
-    def test_s3_path_sanitised(self):
-        result = derive_markdown_relative_path("s3://bucket/documents/input.pdf")
-        assert result == os.path.join("documents", "input.pdf")
-
     @pytest.mark.asyncio
     async def test_process_page_rotation_wraps_around(self):
         """Test that cumulative rotation correctly wraps around at 360 degrees."""
@@ -535,3 +506,32 @@ Document correctly oriented at 90 degrees total rotation."""
         assert build_page_query_calls[0] == 0  # First call with no rotation
         assert build_page_query_calls[1] == 270  # Second call with 270 degree rotation
         assert build_page_query_calls[2] == 90  # Third call with wrapped rotation (270 + 180 = 450 % 360 = 90)
+
+
+class TestMarkdownPathDerivation:
+    def test_relative_path_preserved(self):
+        result = derive_markdown_relative_path("tests/gnarly_pdfs/sample.pdf")
+        assert result == os.path.join("tests", "gnarly_pdfs", "sample.pdf")
+
+    def test_absolute_path_prefixed(self, tmp_path):
+        absolute_pdf = tmp_path / "docs" / "example.pdf"
+        absolute_pdf.parent.mkdir(parents=True, exist_ok=True)
+        absolute_pdf.touch()
+
+        result = derive_markdown_relative_path(str(absolute_pdf))
+        assert result.startswith(os.path.join("absolute", "tmp"))
+        assert result.endswith(os.path.join("docs", "example.pdf"))
+
+    def test_windows_style_path(self):
+        path = r"C:\data\reports\demo.pdf"
+        result = derive_markdown_relative_path(path)
+        assert result.startswith(os.path.join("absolute", "C"))
+        assert result.endswith(os.path.join("data", "reports", "demo.pdf"))
+
+    def test_parent_segments_removed(self):
+        result = derive_markdown_relative_path("../outside/../doc.pdf")
+        assert result == "doc.pdf"
+
+    def test_s3_path_sanitised(self):
+        result = derive_markdown_relative_path("s3://bucket/documents/input.pdf")
+        assert result == os.path.join("documents", "input.pdf")
