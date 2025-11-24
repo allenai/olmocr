@@ -193,7 +193,9 @@ python_classes = [
 ]
 log_format = "%(asctime)s - %(levelname)s - %(name)s - %(message)s"
 log_level = "DEBUG"
+asyncio_mode = "strict"
 markers = [
-    "nonci: mark test as not intended for CI runs"
+    "nonci: mark test as not intended for CI runs",
+    "asyncio: mark test as an asyncio coroutine"
 ]
 addopts = "-m 'not nonci'"
