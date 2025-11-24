@@ -8,7 +8,12 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from PIL import Image
 
-from olmocr.pipeline import PageResult, build_page_query, process_page
+from olmocr.pipeline import (
+    PageResult,
+    build_page_query,
+    derive_markdown_relative_path,
+    process_page,
+)
 
 
 def create_test_image(width=100, height=150):
@@ -506,3 +511,37 @@ Document correctly oriented at 90 degrees total rotation."""
         assert build_page_query_calls[0] == 0  # First call with no rotation
         assert build_page_query_calls[1] == 270  # Second call with 270 degree rotation
         assert build_page_query_calls[2] == 90  # Third call with wrapped rotation (270 + 180 = 450 % 360 = 90)
+
+
+class TestMarkdownPathDerivation:
+    def test_relative_path_preserved(self):
+        """Test that relative paths are preserved without modification."""
+        result = derive_markdown_relative_path("tests/gnarly_pdfs/sample.pdf")
+        assert result == os.path.join("tests", "gnarly_pdfs", "sample.pdf")
+
+    def test_absolute_path_prefixed(self, tmp_path):
+        """Test that absolute paths are prefixed with 'absolute/' to keep outputs in workspace."""
+        absolute_pdf = tmp_path / "docs" / "example.pdf"
+        absolute_pdf.parent.mkdir(parents=True, exist_ok=True)
+        absolute_pdf.touch()
+
+        result = derive_markdown_relative_path(str(absolute_pdf))
+        assert result.startswith(os.path.join("absolute", "tmp"))
+        assert result.endswith(os.path.join("docs", "example.pdf"))
+
+    def test_windows_style_path(self):
+        """Test that Windows-style absolute paths (e.g., C:\\path) are handled correctly."""
+        path = r"C:\data\reports\demo.pdf"
+        result = derive_markdown_relative_path(path)
+        assert result.startswith(os.path.join("absolute", "C"))
+        assert result.endswith(os.path.join("data", "reports", "demo.pdf"))
+
+    def test_parent_segments_removed(self):
+        """Test that parent directory traversal attempts (..) are removed from paths."""
+        result = derive_markdown_relative_path("../outside/../doc.pdf")
+        assert result == "doc.pdf"
+
+    def test_s3_path_sanitised(self):
+        """Test that S3 paths are properly sanitised and converted to relative paths."""
+        result = derive_markdown_relative_path("s3://bucket/documents/input.pdf")
+        assert result == os.path.join("documents", "input.pdf")

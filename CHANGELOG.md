@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Fixed
+
+- Fixed markdown export escaping workspace directory when `--pdfs` receives absolute paths. Absolute paths are now safely prefixed with `absolute/` to keep outputs within the workspace. ([#391](https://github.com/allenai/olmocr/issues/391))
+
 ## [v0.4.6](https://github.com/allenai/olmocr/releases/tag/v0.4.6) - 2025-11-17
 
 ## [v0.4.5](https://github.com/allenai/olmocr/releases/tag/v0.4.5) - 2025-11-14

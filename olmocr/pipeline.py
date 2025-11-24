@@ -52,6 +52,115 @@ from olmocr.train.dataloader import FrontMatterParser
 from olmocr.version import VERSION
 from olmocr.work_queue import LocalBackend, S3Backend, WorkQueue
 
+# Filter object, cached so it will only get loaded when/if you need it
+get_pdf_filter = cache(lambda: PdfFilter(languages_to_keep={Language.ENGLISH, None}, apply_download_spam_check=True, apply_form_check=True))
+
+
+def _split_and_sanitize_path(path_str: str) -> list[str]:
+    """
+    Break a path into safe components, removing any attempts to traverse upwards.
+
+    This function normalises path separators, removes parent directory references (..),
+    current directory references (.), empty segments, and colons to create a safe
+    list of path components.
+
+    Args:
+        path_str: The path string to split and sanitise.
+
+    Returns:
+        A list of sanitised path components. Returns an empty list if path_str is empty.
+    """
+
+    if not path_str:
+        return []
+
+    normalized = path_str.replace("\\", os.sep)
+    parts = []
+
+    for part in normalized.split(os.sep):
+        if not part or part in (".", os.curdir):
+            continue
+        if part in ("..", os.pardir):
+            continue
+
+        cleaned = part.replace(":", "")
+        if cleaned:
+            parts.append(cleaned)
+
+    return parts
+
+
+def derive_markdown_relative_path(source_file: str) -> str:
+    """
+    Return a workspace-safe relative path for a markdown export based on the source file.
+
+    This function ensures that markdown outputs are always contained within the workspace
+    directory by converting absolute paths to relative paths prefixed with `absolute/`.
+    It handles local paths (both Unix and Windows-style), S3 paths, and prevents directory
+    traversal attacks.
+
+    Args:
+        source_file: The source file path, which can be:
+            - A relative path (e.g., "docs/example.pdf")
+            - An absolute Unix path (e.g., "/home/user/docs/example.pdf")
+            - A Windows-style absolute path (e.g., "C:\\data\\example.pdf")
+            - An S3 path (e.g., "s3://bucket/documents/example.pdf")
+
+    Returns:
+        A workspace-safe relative path. Absolute paths are prefixed with "absolute/",
+        and all paths are sanitised to prevent directory traversal. Examples:
+            - "docs/example.pdf" -> "docs/example.pdf"
+            - "/home/user/docs/example.pdf" -> "absolute/home/user/docs/example.pdf"
+            - "C:\\data\\example.pdf" -> "absolute/C/data/example.pdf"
+            - "s3://bucket/documents/example.pdf" -> "documents/example.pdf"
+    """
+
+    # S3 paths were already relative to the bucket path; just sanitise components.
+    if source_file.startswith("s3://"):
+        parsed = urlparse(source_file)
+        relative = parsed.path.lstrip("/")
+        parts = _split_and_sanitize_path(relative)
+        if not parts:
+            digest = hashlib.sha1(source_file.encode("utf-8")).hexdigest()[:12]
+            parts = [digest]
+        return os.path.join(*parts)
+
+    normalized = source_file.replace("\\", os.sep)
+
+    # Detect Windows-style absolute paths (e.g., C:\path or C:/path) BEFORE normpath
+    # This works even on Linux where os.path.isabs() doesn't recognize Windows paths
+    # Check if path starts with a drive letter pattern (e.g., "C:" or "c:")
+    is_windows_absolute = len(normalized) >= 3 and normalized[0].isalpha() and normalized[1] == ":" and normalized[2] in (os.sep, "/", "\\")
+
+    normalized = os.path.normpath(normalized)
+
+    if os.path.isabs(normalized) or is_windows_absolute:
+        abs_path = os.path.abspath(normalized) if not is_windows_absolute else normalized
+        drive, tail = os.path.splitdrive(abs_path)
+
+        # On Linux, splitdrive won't detect Windows drives, so check manually
+        if not drive and is_windows_absolute:
+            drive = abs_path[0] + ":"
+            tail = abs_path[3:] if len(abs_path) > 3 else ""
+
+        tail = tail.lstrip(os.sep)
+        parts = _split_and_sanitize_path(tail)
+        if drive:
+            parts.insert(0, drive.replace(":", ""))
+        prefix = ["absolute"]
+        if parts:
+            prefix.extend(parts)
+        else:
+            prefix.append(hashlib.sha1(abs_path.encode("utf-8")).hexdigest()[:12])
+        return os.path.join(*prefix)
+
+    parts = _split_and_sanitize_path(normalized)
+    if not parts:
+        digest = hashlib.sha1(normalized.encode("utf-8")).hexdigest()[:12]
+        parts = [digest]
+    return os.path.join(*parts)
+
+
 # Initialize logger
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
@@ -578,14 +687,7 @@ async def worker(args, work_queue: WorkQueue, semaphore, worker_id):
                     source_file = doc["metadata"]["Source-File"]
                     natural_text = doc["text"]
 
-                    # Create the output markdown path that preserves the folder structure
-                    if source_file.startswith("s3://"):
-                        # Extract the path after the bucket name for S3 sources
-                        parsed = urlparse(source_file)
-                        relative_path = parsed.path.lstrip("/")
-                    else:
-                        # For local files, use the full path
-                        relative_path = source_file
+                    relative_path = derive_markdown_relative_path(source_file)
 
                     # Change the extension to .md
                     md_filename = os.path.splitext(os.path.basename(relative_path))[0] + ".md"
