@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from PIL import Image
 
-from olmocr.pipeline import PageResult, build_page_query, process_page
+from olmocr.pipeline import PageResult, build_page_query, derive_markdown_relative_path, process_page
 
 
 def create_test_image(width=100, height=150):
@@ -407,6 +407,35 @@ Document is now correctly oriented after 180 degree rotation."""
         # Verify tracker was called correctly
         mock_tracker.track_work.assert_any_call(0, "test-cumulative-rotation.pdf-1", "started")
         mock_tracker.track_work.assert_any_call(0, "test-cumulative-rotation.pdf-1", "finished")
+
+
+class TestMarkdownPathDerivation:
+    def test_relative_path_preserved(self):
+        result = derive_markdown_relative_path("tests/gnarly_pdfs/sample.pdf")
+        assert result == os.path.join("tests", "gnarly_pdfs", "sample.pdf")
+
+    def test_absolute_path_prefixed(self, tmp_path):
+        absolute_pdf = tmp_path / "docs" / "example.pdf"
+        absolute_pdf.parent.mkdir(parents=True, exist_ok=True)
+        absolute_pdf.touch()
+
+        result = derive_markdown_relative_path(str(absolute_pdf))
+        assert result.startswith(os.path.join("absolute", "tmp"))
+        assert result.endswith(os.path.join("docs", "example.pdf"))
+
+    def test_windows_style_path(self):
+        path = r"C:\data\reports\demo.pdf"
+        result = derive_markdown_relative_path(path)
+        assert result.startswith(os.path.join("absolute", "C"))
+        assert result.endswith(os.path.join("data", "reports", "demo.pdf"))
+
+    def test_parent_segments_removed(self):
+        result = derive_markdown_relative_path("../outside/../doc.pdf")
+        assert result == "doc.pdf"
+
+    def test_s3_path_sanitised(self):
+        result = derive_markdown_relative_path("s3://bucket/documents/input.pdf")
+        assert result == os.path.join("documents", "input.pdf")
 
     @pytest.mark.asyncio
     async def test_process_page_rotation_wraps_around(self):
