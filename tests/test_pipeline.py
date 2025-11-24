@@ -8,7 +8,12 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from PIL import Image
 
-from olmocr.pipeline import PageResult, build_page_query, derive_markdown_relative_path, process_page
+from olmocr.pipeline import (
+    PageResult,
+    build_page_query,
+    derive_markdown_relative_path,
+    process_page,
+)
 
 
 def create_test_image(width=100, height=150):
