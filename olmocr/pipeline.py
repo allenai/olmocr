@@ -651,8 +651,8 @@ async def vllm_server_task(model_name_or_path, args, semaphore, unknown_args=Non
         str(args.data_parallel_size),
         "--scheduling-policy",
         "priority",
-        "--limit-mm-per-prompt",
-        '{"video": 0}',  # Disabling video encoder saves RAM that you can put towards the KV cache, thanks @charitarthchugh
+        "--limit-mm-per-prompt", '{"video": 0}',  # Disabling video encoder saves RAM that you can put towards the KV cache, thanks @charitarthchugh
+        "--mm-processor-cache-gb", "0", # Disabling cache as most page images for PDFs are going to be unique, and 
     ]
 
     if args.gpu_memory_utilization is not None:
