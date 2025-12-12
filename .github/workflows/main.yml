@@ -95,7 +95,7 @@ jobs:
 
       - name: Upload package distribution files
         if: matrix.task.name == 'Build'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: package
           path: dist
