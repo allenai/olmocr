@@ -280,7 +280,7 @@ We have tested `olmOCR-2-7B-1025-FP8` on these external model providers and conf
 
 Notes on arguments
 - `--server`: Defines the OpenAI-compatible endpoint: ex `https://api.deepinfra.com/v1/openai`
-- `--api_key`: Your API key, bassed in via Authorization Bearer HTTP header
+- `--api_key`: Your API key, passed in via Authorization Bearer HTTP header
 - `--pages_per_group`: You may want a smaller number of pages per group as many external provides have lower concurrent request limits
 - `--model`: The model identifier, ex. `allenai/olmOCR-2-7B-1025`, different providers have different names, and if you run locally, you can use `olmocr`
 - Other arguments work the same as with local inference
