@@ -40,6 +40,9 @@ dependencies = [
   "torch>=2.7.0",
   "transformers==4.57.3",
   "beaker-py",
+  "fastapi",
+  "uvicorn",
+  "python-multipart",
 ]
 license = {file = "LICENSE"}
 
