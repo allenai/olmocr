@@ -297,17 +297,19 @@ async def process_page(args, worker_id: int, pdf_orig_path: str, pdf_local_path:
 
     # === Non-rotation error path: race sequential retries vs parallel-on-empty ===
     winner: PageResult | None = None
+    last_valid: PageResult | None = None  # Track any valid result, even if rotation_valid is false
     done = asyncio.Event()
 
     async def sequential_retries():
-        nonlocal winner, cumulative_rotation
+        nonlocal winner, last_valid, cumulative_rotation
         for attempt in retry_attempts:
             if done.is_set():
                 return
             r = await try_single_page(args, pdf_orig_path, pdf_local_path, page_num, attempt, cumulative_rotation)
             if done.is_set():
                 return
-            if r is not None:  # Another rotation correction needed
+            if r is not None and r.is_valid:
+                last_valid = r
                 cumulative_rotation = (cumulative_rotation + r.response.rotation_correction) % 360
             if r is not None and r.is_valid and r.response.is_rotation_valid:
                 winner = r
@@ -315,7 +317,7 @@ async def process_page(args, worker_id: int, pdf_orig_path: str, pdf_local_path:
                 return
 
     async def parallel_when_queue_empty():
-        nonlocal winner, cumulative_rotation
+        nonlocal winner, last_valid, cumulative_rotation
         # Wait for queue to empty
         while not done.is_set() and vllm_queued_requests != 0:
             await asyncio.sleep(1)
@@ -335,6 +337,8 @@ async def process_page(args, worker_id: int, pdf_orig_path: str, pdf_local_path:
                 if done.is_set():
                     break
                 r = await coro
+                if r is not None and r.is_valid:
+                    last_valid = r
                 if r is not None and r.is_valid and r.response.is_rotation_valid:
                     winner = r
                     done.set()
@@ -350,7 +354,13 @@ async def process_page(args, worker_id: int, pdf_orig_path: str, pdf_local_path:
         await tracker.track_work(worker_id, f"{pdf_orig_path}-{page_num}", "finished")
         return winner
 
-    # All retries exhausted
+    # No perfect result, but return a valid one if we have it (even with wrong rotation)
+    if last_valid:
+        metrics.add_metrics(**{"completed_pages": 1, "finished_on_retry": 1})
+        await tracker.track_work(worker_id, f"{pdf_orig_path}-{page_num}", "finished")
+        return last_valid
+
+    # All retries exhausted with no valid results
     logger.error(f"Failed {pdf_orig_path}-{page_num} after {MAX_RETRIES} attempts")
     metrics.add_metrics(failed_pages=1)
     await tracker.track_work(worker_id, f"{pdf_orig_path}-{page_num}", "errored")
