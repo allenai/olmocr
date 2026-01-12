@@ -248,7 +248,7 @@ async def process_page(args, worker_id: int, pdf_orig_path: str, pdf_local_path:
     1. Try first attempt
     2. If success: return result
     3. If rotation error: retry sequentially (need model feedback for rotation correction)
-    4. If other error: fire all remaining retries in parallel (if queue empty) or sequential
+    4. If other error: race sequential retries against parallel retries that fire when queue empties
     """
     MAX_RETRIES = args.max_page_retries
     retry_attempts = list(range(1, MAX_RETRIES))
@@ -295,41 +295,60 @@ async def process_page(args, worker_id: int, pdf_orig_path: str, pdf_local_path:
         await tracker.track_work(worker_id, f"{pdf_orig_path}-{page_num}", "errored")
         return make_fallback_result(pdf_orig_path, pdf_local_path, page_num)
 
-    # === Non-rotation error path: sequential, but switch to parallel if queue empties ===
-    for i, attempt in enumerate(retry_attempts):
-        result = await try_single_page(args, pdf_orig_path, pdf_local_path, page_num, attempt, rotation=cumulative_rotation)
+    # === Non-rotation error path: race sequential retries vs parallel-on-empty ===
+    winner: PageResult | None = None
+    done = asyncio.Event()
 
-        if result is not None and result.is_valid and result.response.is_rotation_valid:
-            metrics.add_metrics(**{"completed_pages": 1, f"finished_on_attempt_{attempt}": 1})
-            await tracker.track_work(worker_id, f"{pdf_orig_path}-{page_num}", "finished")
-            return result
+    async def sequential_retries():
+        nonlocal winner, cumulative_rotation
+        for attempt in retry_attempts:
+            if done.is_set():
+                return
+            r = await try_single_page(args, pdf_orig_path, pdf_local_path, page_num, attempt, cumulative_rotation)
+            if done.is_set():
+                return
+            if r is not None:  # Another rotation correction needed
+                cumulative_rotation = (cumulative_rotation + r.response.rotation_correction) % 360
+            if r is not None and r.is_valid and r.response.is_rotation_valid:
+                winner = r
+                done.set()
+                return
 
-        # After each failed attempt, check if queue is empty - if so, fire remaining in parallel
-        remaining_attempts = retry_attempts[i + 1 :]
-        if remaining_attempts and vllm_queued_requests == 0:
-            logger.info(f"Queue empty, firing {len(remaining_attempts)} parallel retries for {pdf_orig_path}-{page_num}")
-            tasks = [
-                asyncio.create_task(try_single_page(args, pdf_orig_path, pdf_local_path, page_num, a, rotation=cumulative_rotation)) for a in remaining_attempts
-            ]
+    async def parallel_when_queue_empty():
+        nonlocal winner, cumulative_rotation
+        # Wait for queue to empty
+        while not done.is_set() and vllm_queued_requests != 0:
+            await asyncio.sleep(1)
 
+        if done.is_set():
+            return
+
+        logger.info(f"Queue empty, firing {len(retry_attempts)} parallel retries for {pdf_orig_path}-{page_num}")
+
+        # Fire all retries in parallel
+        tasks = [
+            asyncio.create_task(try_single_page(args, pdf_orig_path, pdf_local_path, page_num, a, cumulative_rotation))
+            for a in retry_attempts
+        ]
+        try:
             for coro in asyncio.as_completed(tasks):
-                try:
-                    result = await coro
-                    if result is not None and result.is_valid and result.response.is_rotation_valid:
-                        for t in tasks:
-                            t.cancel()
-                        metrics.add_metrics(**{"completed_pages": 1, "finished_on_parallel_retry": 1})
-                        await tracker.track_work(worker_id, f"{pdf_orig_path}-{page_num}", "finished")
-                        return result
-                except asyncio.CancelledError:
-                    continue
-            break  # Parallel attempts exhausted
+                if done.is_set():
+                    break
+                r = await coro
+                if r is not None and r.is_valid and r.response.is_rotation_valid:
+                    winner = r
+                    done.set()
+                    break
+        finally:
+            for t in tasks:
+                t.cancel()
 
-    # If you tried many times and a least had a valid response, then return that in the end
-    if result is not None and result.is_valid:
-        metrics.add_metrics(**{"completed_pages": 1, f"finished_on_attempt_{MAX_RETRIES}": 1})
+    await asyncio.gather(sequential_retries(), parallel_when_queue_empty())
+
+    if winner:
+        metrics.add_metrics(**{"completed_pages": 1, "finished_on_retry": 1})
         await tracker.track_work(worker_id, f"{pdf_orig_path}-{page_num}", "finished")
-        return result
+        return winner
 
     # All retries exhausted
     logger.error(f"Failed {pdf_orig_path}-{page_num} after {MAX_RETRIES} attempts")
