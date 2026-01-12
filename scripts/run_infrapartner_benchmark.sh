@@ -9,6 +9,9 @@
 #
 # Testing deepinfra
 # scripts/run_infrapartner_benchmark.sh --server https://api.deepinfra.com/v1/openai --model allenai/olmOCR-2-7B-1025 --beaker-secret jakep-deepinfra-api-key
+#
+# Testing Cirrascale
+# scripts/run_infrapartner_benchmark.sh --server https://ai2endpoints.cirrascale.ai/api --model allenai/olmOCR-2-7B-1025 --beaker-secret jakep-cirrascale-api-key
 set -e
 
 # Parse command line arguments
