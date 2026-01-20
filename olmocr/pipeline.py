@@ -704,7 +704,6 @@ async def worker(args, work_queue: WorkQueue, worker_id):
             break
 
         logger.info(f"Worker {worker_id} processing work item {work_item.hash}")
-        await tracker.clear_work(worker_id)
 
         try:
             async with asyncio.TaskGroup() as tg:
