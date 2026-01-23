@@ -3,27 +3,24 @@
 Script to download and aggregate results from s2orcforolmo workspaces.
 
 Downloads all result files from workspaces matching s2orcforolmo*_workspace,
-adds license information extracted from the Source-File path, and writes
-to a single output file.
+adds license information extracted from the Source-File path, and saves
+to a local folder preserving original filenames.
 
 Usage:
-    python scripts/download_s2orc_results.py output.jsonl
-    python scripts/download_s2orc_results.py output.jsonl --workers 64
+    python scripts/download_s2orc_results.py /path/to/output_folder
+    python scripts/download_s2orc_results.py /path/to/output_folder --workers 64
 """
 
 import argparse
 import gzip
-import io
 import json
+import os
 import re
 from concurrent.futures import ProcessPoolExecutor, as_completed
-from functools import partial
-from multiprocessing import Manager
 
 import boto3
 from tqdm import tqdm
 
-BASE_PREFIX = "s3://ai2-oe-data/jakep/dolma4pdfs_workspaces/"
 BUCKET = "ai2-oe-data"
 KEY_PREFIX = "jakep/dolma4pdfs_workspaces/"
 
@@ -87,13 +84,21 @@ def list_result_files(s3_client, workspace: str) -> list[str]:
     return files
 
 
-def process_single_file(s3_path: str) -> list[dict]:
+def process_single_file(s3_path: str, output_dir: str) -> tuple[str, int]:
     """
-    Download and process a single result file.
-    Returns list of processed lines with license added.
+    Download and process a single result file, saving to output directory.
+    Returns tuple of (output_filename, line_count).
     """
     s3_client = boto3.client("s3")
     bucket, key = parse_s3_path(s3_path)
+
+    # Get original filename
+    original_filename = os.path.basename(key)
+    # Remove .gz extension if present for output
+    if original_filename.endswith(".gz"):
+        original_filename = original_filename[:-3]
+
+    output_path = os.path.join(output_dir, original_filename)
 
     try:
         response = s3_client.get_object(Bucket=bucket, Key=key)
@@ -103,23 +108,25 @@ def process_single_file(s3_path: str) -> list[dict]:
         if s3_path.endswith(".gz"):
             content = gzip.decompress(content)
 
-        lines = []
-        for line in content.decode("utf-8").strip().split("\n"):
-            if not line:
-                continue
-            try:
-                data = json.loads(line)
-                # Extract license from metadata.Source-File
-                source_file = data.get("metadata", {}).get("Source-File", "")
-                data["license"] = extract_license_from_source_file(source_file)
-                lines.append(data)
-            except json.JSONDecodeError:
-                continue
+        line_count = 0
+        with open(output_path, "w") as out_f:
+            for line in content.decode("utf-8").strip().split("\n"):
+                if not line:
+                    continue
+                try:
+                    data = json.loads(line)
+                    # Extract license from metadata.Source-File
+                    source_file = data.get("metadata", {}).get("Source-File", "")
+                    data["license"] = extract_license_from_source_file(source_file)
+                    out_f.write(json.dumps(data) + "\n")
+                    line_count += 1
+                except json.JSONDecodeError:
+                    continue
 
-        return lines
+        return (original_filename, line_count)
     except Exception as e:
         print(f"Error processing {s3_path}: {e}")
-        return []
+        return (original_filename, 0)
 
 
 def main():
@@ -127,8 +134,8 @@ def main():
         description="Download and aggregate s2orcforolmo workspace results with license extraction."
     )
     parser.add_argument(
-        "output",
-        help="Output file path (will write JSONL)",
+        "output_dir",
+        help="Output directory path (will contain JSONL files with original names)",
     )
     parser.add_argument(
         "--workers",
@@ -137,6 +144,9 @@ def main():
         help="Number of parallel workers (default: 32)",
     )
     args = parser.parse_args()
+
+    # Create output directory if it doesn't exist
+    os.makedirs(args.output_dir, exist_ok=True)
 
     s3_client = boto3.client("s3")
 
@@ -164,30 +174,32 @@ def main():
         print("No result files found.")
         return 1
 
-    # Step 3: Process files in parallel and write output
+    # Step 3: Process files in parallel and save to output directory
     print(f"\nProcessing files with {args.workers} workers...")
     total_lines = 0
+    total_files = 0
 
-    with open(args.output, "w") as out_f:
-        with ProcessPoolExecutor(max_workers=args.workers) as executor:
-            futures = {executor.submit(process_single_file, f): f for f in all_files}
+    with ProcessPoolExecutor(max_workers=args.workers) as executor:
+        futures = {
+            executor.submit(process_single_file, f, args.output_dir): f
+            for f in all_files
+        }
 
-            with tqdm(total=len(futures), desc="Downloading & processing") as pbar:
-                for future in as_completed(futures):
-                    try:
-                        lines = future.result()
-                        for line in lines:
-                            out_f.write(json.dumps(line) + "\n")
-                            total_lines += 1
-                    except Exception as e:
-                        print(f"Error: {e}")
-                    pbar.update(1)
-                    pbar.set_postfix({"lines": f"{total_lines:,}"})
+        with tqdm(total=len(futures), desc="Downloading & processing") as pbar:
+            for future in as_completed(futures):
+                try:
+                    filename, line_count = future.result()
+                    total_lines += line_count
+                    total_files += 1
+                except Exception as e:
+                    print(f"Error: {e}")
+                pbar.update(1)
+                pbar.set_postfix({"files": f"{total_files:,}", "lines": f"{total_lines:,}"})
 
     print(f"\nComplete!")
-    print(f"  Total files processed: {len(all_files):,}")
+    print(f"  Total files processed: {total_files:,}")
     print(f"  Total lines written: {total_lines:,}")
-    print(f"  Output: {args.output}")
+    print(f"  Output directory: {args.output_dir}")
 
     return 0
 
