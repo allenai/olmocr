@@ -4,7 +4,6 @@ import glob
 import hashlib
 import logging
 import os
-import posixpath
 import time
 from io import BytesIO, TextIOWrapper
 from pathlib import Path
@@ -544,8 +543,6 @@ def put_gcs_bytes(gcs_client, gcs_path: str, data: bytes):
 
 def download_zstd_csv_gcs(gcs_client, gcs_path: str) -> List[str]:
     """Download and decompress a .zstd CSV file from GCS."""
-    from google.api_core.exceptions import NotFound
-
     try:
         compressed_data = get_gcs_bytes(gcs_client, gcs_path)
         dctx = zstd.ZstdDecompressor()
@@ -554,7 +551,7 @@ def download_zstd_csv_gcs(gcs_client, gcs_path: str) -> List[str]:
         lines = text_stream.readlines()
         logger.info(f"Downloaded and decompressed {gcs_path}")
         return lines
-    except NotFound:
+    except FileNotFoundError:
         logger.info(f"No existing {gcs_path} found in GCS, starting fresh.")
         return []
 
