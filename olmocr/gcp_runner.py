@@ -30,6 +30,9 @@ GCP_GPU_CONFIGS = {
     },
 }
 
+# GitHub repo for olmocr
+OLMOCR_REPO = "https://github.com/allenai/olmocr.git"
+
 
 def add_gcp_args(parser):
     """Add GCP-specific arguments to the parser."""
@@ -61,9 +64,33 @@ def add_gcp_args(parser):
     return gcp_args
 
 
+def get_git_info():
+    """Get current git branch and commit hash."""
+    try:
+        branch = subprocess.run(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+            capture_output=True, text=True, check=True
+        ).stdout.strip()
+
+        commit = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            capture_output=True, text=True, check=True
+        ).stdout.strip()
+
+        return branch, commit
+    except subprocess.CalledProcessError as e:
+        logger.error(f"Failed to get git info: {e}")
+        sys.exit(1)
+
+
 def submit_gcp_job(args, unknown_args):
     """Submit a job to GCP using a Managed Instance Group."""
-    from olmocr.version import VERSION
+    # Use latest docker image (without version suffix for dev work)
+    docker_image = "alleninstituteforai/olmocr:latest"
+
+    # Get current git branch and commit
+    git_branch, git_commit = get_git_info()
+    logger.info(f"Using git branch: {git_branch}, commit: {git_commit}")
 
     # Validate workspace is GCS
     if not args.workspace.startswith("gs://"):
@@ -73,9 +100,6 @@ def submit_gcp_job(args, unknown_args):
     # Get GPU config
     gpu_config = GCP_GPU_CONFIGS[args.gcp_gpu_type]
     region = gpu_config["region"]
-
-    # Docker image to use
-    docker_image = f"alleninstituteforai/olmocr:v{VERSION}-with-model"
 
     # Generate unique names based on workspace and GCP user
     gcp_account = subprocess.run(
@@ -144,7 +168,7 @@ def submit_gcp_job(args, unknown_args):
     if unknown_args:
         pipeline_cmd += " " + " ".join(unknown_args)
 
-    # Generate startup script that uses Docker
+    # Generate startup script that uses Docker with mounted code from git
     startup_script = f'''#!/bin/bash
 set -euo pipefail
 
@@ -153,8 +177,13 @@ exec > >(tee -a "${{LOG_FILE}}") 2>&1
 
 echo "$(date): Starting olmocr setup..."
 
-# Configuration
+# Configuration from metadata
 DOCKER_IMAGE="{docker_image}"
+GIT_REPO="{OLMOCR_REPO}"
+GIT_BRANCH=$(curl -s "http://metadata.google.internal/computeMetadata/v1/instance/attributes/GIT_BRANCH" -H "Metadata-Flavor: Google")
+GIT_COMMIT=$(curl -s "http://metadata.google.internal/computeMetadata/v1/instance/attributes/GIT_COMMIT" -H "Metadata-Flavor: Google")
+
+echo "$(date): Git branch: $GIT_BRANCH, commit: $GIT_COMMIT"
 
 # Wait for GPU to be available
 echo "$(date): Waiting for GPU..."
@@ -189,80 +218,94 @@ if ! dpkg -l | grep -q nvidia-container-toolkit; then
     systemctl restart docker
 fi
 
+# Clone the olmocr repo and checkout the specific commit
+echo "$(date): Cloning olmocr repo..."
+OLMOCR_DIR="/opt/olmocr-source"
+rm -rf "$OLMOCR_DIR"
+git clone --branch "$GIT_BRANCH" "$GIT_REPO" "$OLMOCR_DIR"
+cd "$OLMOCR_DIR"
+git checkout "$GIT_COMMIT"
+echo "$(date): Checked out commit $(git rev-parse HEAD)"
+
 # Pull the Docker image
 echo "$(date): Pulling Docker image ${{DOCKER_IMAGE}}..."
 docker pull "${{DOCKER_IMAGE}}"
 
-# Run the pipeline in Docker (disable set -e to capture exit code)
+# Run the pipeline in Docker with mounted source code
+# Mount the cloned repo over /app/olmocr to override the baked-in code
 echo "$(date): Starting pipeline in Docker..."
+echo "$(date): Command: {pipeline_cmd}"
 set +e
 docker run --rm --gpus all \\
     -e GOOGLE_APPLICATION_CREDENTIALS=/root/.config/gcloud/application_default_credentials.json \\
     -v /root/.config/gcloud:/root/.config/gcloud:ro \\
+    -v "$OLMOCR_DIR/olmocr:/app/olmocr:ro" \\
     "${{DOCKER_IMAGE}}" \\
     -c "{pipeline_cmd}"
-# PIPELINE_EXIT_CODE=$?
-# set -e
+PIPELINE_EXIT_CODE=$?
+set -e
 
-# # Get instance metadata
-# INSTANCE_NAME=$(curl -s "http://metadata.google.internal/computeMetadata/v1/instance/name" -H "Metadata-Flavor: Google")
-# MIG_NAME=$(curl -s "http://metadata.google.internal/computeMetadata/v1/instance/attributes/MIG_NAME" -H "Metadata-Flavor: Google")
-# REGION=$(curl -s "http://metadata.google.internal/computeMetadata/v1/instance/attributes/REGION" -H "Metadata-Flavor: Google")
-# PROJECT=$(curl -s "http://metadata.google.internal/computeMetadata/v1/instance/attributes/PROJECT" -H "Metadata-Flavor: Google")
+echo "$(date): Pipeline finished with exit code $PIPELINE_EXIT_CODE"
 
-# if [ $PIPELINE_EXIT_CODE -eq 0 ]; then
-#     # Success - remove instance from MIG (won't be replaced)
-#     echo "$(date): Pipeline completed successfully, removing instance from MIG..."
+# Get instance metadata for cleanup
+INSTANCE_NAME=$(curl -s "http://metadata.google.internal/computeMetadata/v1/instance/name" -H "Metadata-Flavor: Google")
+MIG_NAME=$(curl -s "http://metadata.google.internal/computeMetadata/v1/instance/attributes/MIG_NAME" -H "Metadata-Flavor: Google")
+REGION=$(curl -s "http://metadata.google.internal/computeMetadata/v1/instance/attributes/REGION" -H "Metadata-Flavor: Google")
+PROJECT=$(curl -s "http://metadata.google.internal/computeMetadata/v1/instance/attributes/PROJECT" -H "Metadata-Flavor: Google")
 
-#     # Check if we're the last instance before deleting ourselves
-#     MIG_SIZE=$(gcloud compute instance-groups managed describe "$MIG_NAME" \\
-#         --region="$REGION" \\
-#         --project="$PROJECT" \\
-#         --format="value(targetSize)" 2>/dev/null || echo "0")
+if [ $PIPELINE_EXIT_CODE -eq 0 ]; then
+    # Success - remove instance from MIG (won't be replaced)
+    echo "$(date): Pipeline completed successfully, removing instance from MIG..."
 
-#     TEMPLATE_NAME=$(gcloud compute instance-groups managed describe "$MIG_NAME" \\
-#         --region="$REGION" \\
-#         --project="$PROJECT" \\
-#         --format="value(instanceTemplate)" 2>/dev/null | xargs basename || echo "")
+    # Check if we're the last instance before deleting ourselves
+    MIG_SIZE=$(gcloud compute instance-groups managed describe "$MIG_NAME" \\
+        --region="$REGION" \\
+        --project="$PROJECT" \\
+        --format="value(targetSize)" 2>/dev/null || echo "0")
 
-#     echo "$(date): Current MIG size: $MIG_SIZE"
+    TEMPLATE_NAME=$(gcloud compute instance-groups managed describe "$MIG_NAME" \\
+        --region="$REGION" \\
+        --project="$PROJECT" \\
+        --format="value(instanceTemplate)" 2>/dev/null | xargs basename || echo "")
 
-#     # Delete ourselves from the MIG (regional MIG uses --region)
-#     gcloud compute instance-groups managed delete-instances "$MIG_NAME" \\
-#         --instances="$INSTANCE_NAME" \\
-#         --region="$REGION" \\
-#         --project="$PROJECT" \\
-#         --quiet || echo "$(date): Failed to delete instance (may already be deleted)"
+    echo "$(date): Current MIG size: $MIG_SIZE"
 
-#     # If we were the last instance, clean up MIG and template
-#     if [ "$MIG_SIZE" -eq 1 ]; then
-#         echo "$(date): Last instance - cleaning up MIG and template..."
+    # Delete ourselves from the MIG (regional MIG uses --region)
+    gcloud compute instance-groups managed delete-instances "$MIG_NAME" \\
+        --instances="$INSTANCE_NAME" \\
+        --region="$REGION" \\
+        --project="$PROJECT" \\
+        --quiet || echo "$(date): Failed to delete instance (may already be deleted)"
 
-#         # Wait for our deletion to complete
-#         sleep 30
+    # If we were the last instance, clean up MIG and template
+    if [ "$MIG_SIZE" -eq 1 ]; then
+        echo "$(date): Last instance - cleaning up MIG and template..."
 
-#         # Delete the MIG
-#         gcloud compute instance-groups managed delete "$MIG_NAME" \\
-#             --region="$REGION" \\
-#             --project="$PROJECT" \\
-#             --quiet || echo "$(date): Failed to delete MIG"
+        # Wait for our deletion to complete
+        sleep 30
 
-#         # Delete the instance template
-#         if [ -n "$TEMPLATE_NAME" ]; then
-#             gcloud compute instance-templates delete "$TEMPLATE_NAME" \\
-#                 --project="$PROJECT" \\
-#                 --quiet || echo "$(date): Failed to delete template"
-#         fi
+        # Delete the MIG
+        gcloud compute instance-groups managed delete "$MIG_NAME" \\
+            --region="$REGION" \\
+            --project="$PROJECT" \\
+            --quiet || echo "$(date): Failed to delete MIG"
 
-#         echo "$(date): Cleanup complete"
-#     else
-#         echo "$(date): Instance deletion requested, $((MIG_SIZE - 1)) instances remaining"
-#     fi
-# else
-#     # Error - shutdown and let MIG create a replacement to retry
-#     echo "$(date): Pipeline failed with exit code $PIPELINE_EXIT_CODE, shutting down for retry..."
-#     shutdown -h now
-# fi
+        # Delete the instance template
+        if [ -n "$TEMPLATE_NAME" ]; then
+            gcloud compute instance-templates delete "$TEMPLATE_NAME" \\
+                --project="$PROJECT" \\
+                --quiet || echo "$(date): Failed to delete template"
+        fi
+
+        echo "$(date): Cleanup complete"
+    else
+        echo "$(date): Instance deletion requested, $((MIG_SIZE - 1)) instances remaining"
+    fi
+else
+    # Error - shutdown and let MIG create a replacement to retry
+    echo "$(date): Pipeline failed with exit code $PIPELINE_EXIT_CODE, shutting down for retry..."
+    shutdown -h now
+fi
 '''
 
     # Write startup script to a temp file
@@ -270,9 +313,13 @@ docker run --rm --gpus all \\
     with open(startup_script_path, "w") as f:
         f.write(startup_script)
 
-    # Create instance template
+    # Create instance template with git info in metadata
     logger.info(f"Creating instance template: {template_name}")
     logger.info(f"Using Docker image: {docker_image}")
+    logger.info(f"Git branch: {git_branch}, commit: {git_commit}")
+
+    metadata = f"MIG_NAME={mig_name},REGION={region},PROJECT={args.gcp_project},GIT_BRANCH={git_branch},GIT_COMMIT={git_commit}"
+
     template_cmd = [
         "gcloud", "compute", "instance-templates", "create", template_name,
         f"--project={args.gcp_project}",
@@ -282,7 +329,7 @@ docker run --rm --gpus all \\
         "--image-project=deeplearning-platform-release",
         "--boot-disk-size=2TB",
         "--scopes=storage-rw,logging-write,compute-rw",
-        f"--metadata=MIG_NAME={mig_name},REGION={region},PROJECT={args.gcp_project}",
+        f"--metadata={metadata}",
         f"--metadata-from-file=startup-script={startup_script_path}",
         "--provisioning-model=SPOT",
         "--maintenance-policy=TERMINATE",
@@ -320,6 +367,8 @@ docker run --rm --gpus all \\
     print(f"  Instances: {args.gcp_instances}")
     print(f"  GPU Type: {args.gcp_gpu_type}")
     print(f"  Docker Image: {docker_image}")
+    print(f"  Git Branch: {git_branch}")
+    print(f"  Git Commit: {git_commit}")
     print(f"  Distribution Shape: ANY")
     print(f"\nAuto-cleanup: Instances self-delete when done. Last instance deletes MIG and template.")
     print(f"\nTo monitor instances:")
