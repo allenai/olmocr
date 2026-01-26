@@ -74,9 +74,10 @@ server_logger.addHandler(console_handler)
 # Quiet logs from pypdf
 logging.getLogger("pypdf").setLevel(logging.ERROR)
 
-# Global s3 clients fo the whole script, we have two separate ones in case your workspace and your pdfs are in different accounts
+# Global storage clients for the whole script, we have separate ones in case your workspace and your pdfs are in different accounts
 workspace_s3 = boto3.client("s3")
 pdf_s3 = boto3.client("s3")
+workspace_gcs = None  # Initialized lazily when needed
 pdf_gcs = None  # Initialized lazily when needed
 
 # Global variables for token statistics
@@ -1172,7 +1173,7 @@ async def main():
     )
 
     use_internal_server = not args.server
-    global workspace_s3, pdf_s3, pdf_gcs, max_concurrent_requests_limit
+    global workspace_s3, pdf_s3, pdf_gcs, workspace_gcs, max_concurrent_requests_limit
 
     max_concurrent_requests_limit = asyncio.BoundedSemaphore(args.max_concurrent_requests)
 
@@ -1205,6 +1206,8 @@ async def main():
         from google.cloud import storage
 
         workspace_gcs = storage.Client()
+        # If workspace is on GCS, PDFs are likely also on GCS
+        pdf_gcs = workspace_gcs
 
     # Create work queue with appropriate backend
     if args.workspace.startswith("s3://"):
