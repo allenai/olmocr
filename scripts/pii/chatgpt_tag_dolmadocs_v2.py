@@ -26,7 +26,7 @@ from openai import OpenAI
 from tqdm import tqdm
 
 from olmocr.data.renderpdf import render_pdf_to_base64png
-from olmocr.s3_utils import get_s3_bytes, parse_s3_path
+from olmocr.cloud_utils import get_s3_bytes, parse_s3_path
 
 # Initialize logger
 logger = logging.getLogger(__name__)

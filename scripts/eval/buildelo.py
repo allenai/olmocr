@@ -13,7 +13,7 @@ from dolma_refine.evaluate.segmenters import SpacySegmenter
 from tqdm import tqdm
 
 from olmocr.eval.evalhtml import create_review_html
-from olmocr.s3_utils import expand_s3_glob, get_s3_bytes
+from olmocr.cloud_utils import expand_s3_glob, get_s3_bytes
 
 
 @dataclasses.dataclass

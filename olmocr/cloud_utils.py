@@ -4,6 +4,7 @@ import glob
 import hashlib
 import logging
 import os
+import posixpath
 import time
 from io import BytesIO, TextIOWrapper
 from pathlib import Path
@@ -407,3 +408,94 @@ def compare_hashes_s3(obj, local_file_path: str, storage_type: str) -> bool:
     else:
         logger.info(f"File '{local_file_path}' does not exist locally. Downloading.")
         return True
+
+
+# ============ GCS Helper Functions ============
+
+
+def expand_gcs_glob(gcs_client, gcs_glob: str) -> dict[str, str]:
+    """
+    Expand a GCS path that may or may not contain wildcards (e.g., *.pdf).
+    Returns a dict of {'gs://bucket/key': md5_hash} for each matching object.
+    Raises a ValueError if nothing is found or if a bare prefix was provided by mistake.
+    """
+    parsed = urlparse(gcs_glob)
+    if parsed.scheme != "gs":
+        raise ValueError("Path must start with gs://")
+
+    bucket_name = parsed.netloc
+    raw_path = parsed.path.lstrip("/")
+    prefix = posixpath.dirname(raw_path)
+    pattern = posixpath.basename(raw_path)
+
+    bucket = gcs_client.bucket(bucket_name)
+
+    # Case 1: We have a wildcard
+    if any(wc in pattern for wc in ["*", "?", "[", "]"]):
+        if prefix and not prefix.endswith("/"):
+            prefix += "/"
+        blobs = bucket.list_blobs(prefix=prefix)
+        matched = {}
+        for blob in blobs:
+            if glob.fnmatch.fnmatch(blob.name, posixpath.join(prefix, pattern)):
+                # Use md5_hash if available, otherwise use crc32c
+                hash_val = blob.md5_hash or blob.crc32c or ""
+                matched[f"gs://{bucket_name}/{blob.name}"] = hash_val
+        return matched
+
+    # Case 2: No wildcard -> single file or a bare prefix
+    blob = bucket.blob(raw_path)
+    if blob.exists():
+        blob.reload()  # Load metadata
+        hash_val = blob.md5_hash or blob.crc32c or ""
+        return {f"gs://{bucket_name}/{raw_path}": hash_val}
+
+    # Check if it's actually a folder with contents
+    check_prefix = raw_path if raw_path.endswith("/") else raw_path + "/"
+    blobs = list(bucket.list_blobs(prefix=check_prefix, max_results=1))
+    if blobs:
+        raise ValueError(f"'{gcs_glob}' appears to be a folder. " f"Use a wildcard (e.g., '{gcs_glob.rstrip('/')}/*.pdf') to match files.")
+    raise ValueError(f"No object or prefix found at '{gcs_glob}'. Check your path or add a wildcard.")
+
+
+def get_gcs_bytes(gcs_client, gcs_path: str) -> bytes:
+    """Download bytes from a GCS path."""
+    bucket_name, key = parse_s3_path(gcs_path)
+    bucket = gcs_client.bucket(bucket_name)
+    blob = bucket.blob(key)
+    return blob.download_as_bytes()
+
+
+def put_gcs_bytes(gcs_client, gcs_path: str, data: bytes):
+    """Upload bytes to a GCS path."""
+    bucket_name, key = parse_s3_path(gcs_path)
+    bucket = gcs_client.bucket(bucket_name)
+    blob = bucket.blob(key)
+    blob.upload_from_string(data, content_type="application/octet-stream")
+
+
+def download_zstd_csv_gcs(gcs_client, gcs_path: str) -> List[str]:
+    """Download and decompress a .zstd CSV file from GCS."""
+    try:
+        compressed_data = get_gcs_bytes(gcs_client, gcs_path)
+        dctx = zstd.ZstdDecompressor()
+        decompressed = dctx.decompress(compressed_data)
+        text_stream = TextIOWrapper(BytesIO(decompressed), encoding="utf-8")
+        lines = text_stream.readlines()
+        logger.info(f"Downloaded and decompressed {gcs_path}")
+        return lines
+    except Exception as e:
+        # GCS raises google.cloud.exceptions.NotFound for missing objects
+        if "NotFound" in str(type(e).__name__) or "404" in str(e):
+            logger.info(f"No existing {gcs_path} found in GCS, starting fresh.")
+            return []
+        raise
+
+
+def upload_zstd_csv_gcs(gcs_client, gcs_path: str, lines: List[str]):
+    """Compress and upload a list of lines as a .zstd CSV file to GCS."""
+    joined_text = "\n".join(lines)
+    compressor = zstd.ZstdCompressor()
+    compressed = compressor.compress(joined_text.encode("utf-8"))
+    put_gcs_bytes(gcs_client, gcs_path, compressed)
+    logger.info(f"Uploaded compressed {gcs_path}")

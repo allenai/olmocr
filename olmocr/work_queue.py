@@ -13,11 +13,14 @@ from typing import Any, Dict, List, Optional, Set
 
 import zstandard
 
-from olmocr.s3_utils import (
+from olmocr.cloud_utils import (
     download_zstd_csv,
+    download_zstd_csv_gcs,
+    expand_gcs_glob,
     expand_s3_glob,
     parse_s3_path,
     upload_zstd_csv,
+    upload_zstd_csv_gcs,
 )
 
 logger = logging.getLogger(__name__)
@@ -466,3 +469,105 @@ class S3Backend(Backend):
         done_flag_path = self._get_done_flag_path(work_hash)
         bucket, key = parse_s3_path(done_flag_path)
         await asyncio.to_thread(self.s3_client.put_object, Bucket=bucket, Key=key, Body=b"")
+
+
+class GCSBackend(Backend):
+    """Google Cloud Storage backend."""
+
+    def __init__(self, gcs_client: Any, workspace_path: str):
+        self.gcs_client = gcs_client
+        self.workspace_path = workspace_path.rstrip("/")
+        self._index_path = os.path.join(self.workspace_path, "work_index_list.csv.zstd")
+        self._output_glob = os.path.join(self.workspace_path, DONE_FLAGS_DIR, "*.flag")
+
+    async def load_index_lines(self) -> List[str]:
+        return await asyncio.to_thread(download_zstd_csv_gcs, self.gcs_client, self._index_path)
+
+    async def save_index_lines(self, lines: List[str]) -> None:
+        await asyncio.to_thread(upload_zstd_csv_gcs, self.gcs_client, self._index_path, lines)
+
+    async def get_completed_hashes(self) -> Set[str]:
+        def _list_completed() -> Set[str]:
+            done_work_items = expand_gcs_glob(self.gcs_client, self._output_glob)
+            return {
+                os.path.basename(item)[len("done_") : -len(".flag")]
+                for item in done_work_items
+                if os.path.basename(item).startswith("done_") and os.path.basename(item).endswith(".flag")
+            }
+
+        return await asyncio.to_thread(_list_completed)
+
+    def _get_worker_lock_path(self, work_hash: str) -> str:
+        """Internal method to get worker lock path."""
+        return os.path.join(self.workspace_path, WORKER_LOCKS_DIR, f"worker_{work_hash}.lock")
+
+    def _get_done_flag_path(self, work_hash: str) -> str:
+        """Internal method to get done flag path."""
+        return os.path.join(self.workspace_path, DONE_FLAGS_DIR, f"done_{work_hash}.flag")
+
+    async def _get_object_mtime(self, path: str) -> Optional[datetime.datetime]:
+        """Internal method to get object mtime."""
+        bucket_name, key = parse_s3_path(path)
+
+        def _get_blob_mtime() -> Optional[datetime.datetime]:
+            bucket = self.gcs_client.bucket(bucket_name)
+            blob = bucket.blob(key)
+            if blob.exists():
+                blob.reload()
+                return blob.updated
+            return None
+
+        return await asyncio.to_thread(_get_blob_mtime)
+
+    async def is_worker_lock_taken(self, work_hash: str, worker_lock_timeout_secs: int = 1800) -> bool:
+        """Check if a worker lock is taken and not stale."""
+        lock_path = self._get_worker_lock_path(work_hash)
+        lock_mtime = await self._get_object_mtime(lock_path)
+
+        if not lock_mtime:
+            return False
+
+        now = datetime.datetime.now(datetime.timezone.utc)
+        return (now - lock_mtime).total_seconds() <= worker_lock_timeout_secs
+
+    async def create_worker_lock(self, work_hash: str) -> None:
+        """Create a worker lock for a work hash."""
+        lock_path = self._get_worker_lock_path(work_hash)
+        bucket_name, key = parse_s3_path(lock_path)
+
+        def _create_lock():
+            bucket = self.gcs_client.bucket(bucket_name)
+            blob = bucket.blob(key)
+            blob.upload_from_string(b"", content_type="application/octet-stream")
+
+        await asyncio.to_thread(_create_lock)
+
+    async def delete_worker_lock(self, work_hash: str) -> None:
+        """Delete the worker lock for a work hash if it exists."""
+        lock_path = self._get_worker_lock_path(work_hash)
+        bucket_name, key = parse_s3_path(lock_path)
+
+        def _delete_lock():
+            bucket = self.gcs_client.bucket(bucket_name)
+            blob = bucket.blob(key)
+            if blob.exists():
+                blob.delete()
+
+        await asyncio.to_thread(_delete_lock)
+
+    async def is_completed(self, work_hash: str) -> bool:
+        """Check if a work item has been completed."""
+        done_flag_path = self._get_done_flag_path(work_hash)
+        return await self._get_object_mtime(done_flag_path) is not None
+
+    async def create_done_flag(self, work_hash: str) -> None:
+        """Create a done flag for a work hash."""
+        done_flag_path = self._get_done_flag_path(work_hash)
+        bucket_name, key = parse_s3_path(done_flag_path)
+
+        def _create_flag():
+            bucket = self.gcs_client.bucket(bucket_name)
+            blob = bucket.blob(key)
+            blob.upload_from_string(b"", content_type="application/octet-stream")
+
+        await asyncio.to_thread(_create_flag)

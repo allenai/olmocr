@@ -18,7 +18,7 @@ import tinyhost
 from tqdm import tqdm
 
 from olmocr.data.renderpdf import render_pdf_to_base64webp
-from olmocr.s3_utils import get_s3_bytes, parse_s3_path
+from olmocr.cloud_utils import get_s3_bytes, parse_s3_path
 
 
 def parse_args():

@@ -41,7 +41,7 @@ from transformers import (
 )
 
 from olmocr.pipeline import build_page_query
-from olmocr.s3_utils import parse_s3_path
+from olmocr.cloud_utils import parse_s3_path
 
 s3_client = boto3.client("s3")
 

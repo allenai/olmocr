@@ -23,7 +23,7 @@ from transformers import AutoModelForVision2Seq, AutoProcessor
 from vllm import LLM, SamplingParams
 
 from olmocr.pipeline import build_page_query
-from olmocr.s3_utils import download_directory
+from olmocr.cloud_utils import download_directory
 
 logger = logging.getLogger(__name__)
 

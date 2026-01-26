@@ -22,7 +22,7 @@ import boto3
 from pypdf import PdfReader, PdfWriter
 from tqdm import tqdm
 
-from olmocr.s3_utils import parse_s3_path
+from olmocr.cloud_utils import parse_s3_path
 
 # Set up logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")

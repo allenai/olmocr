@@ -3,7 +3,7 @@ from unittest.mock import MagicMock, Mock
 
 from botocore.exceptions import ClientError
 
-from olmocr.s3_utils import expand_s3_glob
+from olmocr.cloud_utils import expand_s3_glob
 
 
 class TestExpandS3Glob(unittest.TestCase):

@@ -29,7 +29,7 @@ from pydantic import BaseModel, Field, ValidationError
 
 from olmocr.check import check_torch_gpu_available
 from olmocr.metrics import MetricsKeeper
-from olmocr.s3_utils import (
+from olmocr.cloud_utils import (
     download_directory,
     expand_s3_glob,
     get_s3_bytes_with_backoff,

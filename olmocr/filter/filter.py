@@ -119,7 +119,7 @@ if __name__ == "__main__":
     import boto3
     from tqdm import tqdm
 
-    from olmocr.s3_utils import parse_s3_path
+    from olmocr.cloud_utils import parse_s3_path
 
     # Quiet logs from pypdf
     logging.getLogger("pypdf").setLevel(logging.ERROR)

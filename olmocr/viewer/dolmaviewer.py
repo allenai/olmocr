@@ -14,7 +14,7 @@ from jinja2 import Template
 from tqdm import tqdm
 
 from olmocr.data.renderpdf import render_pdf_to_base64webp
-from olmocr.s3_utils import get_s3_bytes, parse_s3_path
+from olmocr.cloud_utils import get_s3_bytes, parse_s3_path
 
 
 def get_pdf_bytes_from_source(s3_client, source_file):
