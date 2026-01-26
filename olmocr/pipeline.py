@@ -44,6 +44,7 @@ from olmocr.cloud_utils import (
     download_zstd_csv,
     expand_gcs_glob,
     expand_s3_glob,
+    get_gcs_bytes,
     get_s3_bytes,
     get_s3_bytes_with_backoff,
     parse_s3_path,
@@ -1269,9 +1270,12 @@ async def main():
 
             for pdf in tqdm(sampled_pdfs, desc="Sampling PDFs to calculate optimal length"):
                 try:
-                    # Download the PDF to a temp file
+                    # Download the PDF to a temp file using appropriate client
                     with tempfile.NamedTemporaryFile(suffix=".pdf") as tmp_file:
-                        tmp_file.write(get_s3_bytes(pdf_s3, pdf))
+                        if pdf.startswith("gs://"):
+                            tmp_file.write(get_gcs_bytes(workspace_gcs, pdf))
+                        else:
+                            tmp_file.write(get_s3_bytes(pdf_s3, pdf))
                         tmp_file.flush()
                         if is_png(tmp_file.name) or is_jpeg(tmp_file.name):
                             page_counts.append(1)
