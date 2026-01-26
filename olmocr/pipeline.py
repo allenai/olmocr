@@ -49,7 +49,9 @@ from olmocr.cloud_utils import (
     get_s3_bytes,
     get_s3_bytes_with_backoff,
     is_gcs_path,
-    parse_s3_path,
+    is_s3_path,
+    parse_cloud_path,
+    put_gcs_bytes,
 )
 from olmocr.train.dataloader import FrontMatterParser
 from olmocr.version import VERSION
@@ -754,12 +756,15 @@ async def worker(args, work_queue: WorkQueue, worker_id):
                 temp_path = tf.name
 
             try:
-                # Define the output S3 path using the work_hash
+                # Define the output path using the work_hash
                 output_final_path = os.path.join(args.workspace, "results", f"output_{work_item.hash}.jsonl")
 
-                if output_final_path.startswith("s3://"):
-                    bucket, key = parse_s3_path(output_final_path)
+                if is_s3_path(output_final_path):
+                    bucket, key = parse_cloud_path(output_final_path)
                     workspace_s3.upload_file(temp_path, bucket, key)
+                elif is_gcs_path(output_final_path):
+                    with open(temp_path, "rb") as f:
+                        put_gcs_bytes(workspace_gcs, output_final_path, f.read())
                 else:
                     # Ensure the results directory exists for local workspace
                     os.makedirs(os.path.dirname(output_final_path), exist_ok=True)
@@ -780,7 +785,7 @@ async def worker(args, work_queue: WorkQueue, worker_id):
                     markdown_dir = os.path.dirname(markdown_path)
 
                     # Create the directory structure if it doesn't exist
-                    if markdown_path.startswith("s3://"):
+                    if is_s3_path(markdown_path):
                         # For S3 paths, we'll create a temporary file and upload it
                         with tempfile.NamedTemporaryFile(mode="w+", delete=False) as md_tf:
                             md_tf.write(natural_text)
@@ -788,12 +793,15 @@ async def worker(args, work_queue: WorkQueue, worker_id):
                             md_temp_path = md_tf.name
 
                         try:
-                            md_bucket, md_key = parse_s3_path(markdown_path)
+                            md_bucket, md_key = parse_cloud_path(markdown_path)
                             workspace_s3.upload_file(md_temp_path, md_bucket, md_key)
                         finally:
                             # Make sure to clean up the temporary file even if upload fails
                             if os.path.exists(md_temp_path):
                                 os.unlink(md_temp_path)
+                    elif is_gcs_path(markdown_path):
+                        # For GCS paths, upload directly
+                        put_gcs_bytes(workspace_gcs, markdown_path, natural_text.encode("utf-8"))
                     else:
                         # For local paths, create the directory structure and write the file
                         os.makedirs(markdown_dir, exist_ok=True)
