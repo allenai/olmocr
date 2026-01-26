@@ -4,11 +4,7 @@ import os
 import re
 import subprocess
 import sys
-import tarfile
 import time
-from pathlib import Path
-
-from google.cloud import storage
 
 logger = logging.getLogger(__name__)
 
@@ -67,6 +63,8 @@ def add_gcp_args(parser):
 
 def submit_gcp_job(args, unknown_args):
     """Submit a job to GCP using a Managed Instance Group."""
+    from olmocr.version import VERSION
+
     # Validate workspace is GCS
     if not args.workspace.startswith("gs://"):
         logger.error("GCP jobs require a GCS workspace (gs://...)")
@@ -75,6 +73,9 @@ def submit_gcp_job(args, unknown_args):
     # Get GPU config
     gpu_config = GCP_GPU_CONFIGS[args.gcp_gpu_type]
     region = gpu_config["region"]
+
+    # Docker image to use
+    docker_image = f"alleninstituteforai/olmocr:v{VERSION}-with-model"
 
     # Generate unique names based on workspace and GCP user
     gcp_account = subprocess.run(
@@ -110,42 +111,6 @@ def submit_gcp_job(args, unknown_args):
     template_name = f"olmocr-{combined}-{timestamp}"
     mig_name = f"olmocr-mig-{combined}-{timestamp}"
 
-    # Find the olmocr package directory
-    package_dir = Path(__file__).parent.parent
-    if not (package_dir / "olmocr").is_dir():
-        logger.error(f"Could not find olmocr package at {package_dir}")
-        sys.exit(1)
-
-    # Create tarball of the source code
-    logger.info("Creating source code tarball...")
-    tarball_path = f"/tmp/olmocr_{timestamp}.tar.gz"
-    with tarfile.open(tarball_path, "w:gz") as tar:
-        # Add the olmocr package
-        tar.add(
-            package_dir / "olmocr",
-            arcname="olmocr",
-            filter=lambda x: None if "__pycache__" in x.name or x.name.endswith(".pyc") else x,
-        )
-        # Add pyproject.toml for installation
-        if (package_dir / "pyproject.toml").exists():
-            tar.add(package_dir / "pyproject.toml", arcname="pyproject.toml")
-
-    # Upload tarball to GCS
-    tarball_gcs_path = f"{args.workspace.rstrip('/')}/source/olmocr_{timestamp}.tar.gz"
-    logger.info(f"Uploading source code to {tarball_gcs_path}...")
-
-    gcs_client = storage.Client(project=args.gcp_project)
-    # Parse GCS path
-    gcs_parts = tarball_gcs_path.replace("gs://", "").split("/", 1)
-    bucket_name = gcs_parts[0]
-    blob_name = gcs_parts[1]
-    bucket = gcs_client.bucket(bucket_name)
-    blob = bucket.blob(blob_name)
-    blob.upload_from_filename(tarball_path)
-
-    # Clean up local tarball
-    os.unlink(tarball_path)
-
     # Build the pipeline command arguments
     # Remove --gcp flags AND their values since workers will run locally
     args_list = []
@@ -179,7 +144,7 @@ def submit_gcp_job(args, unknown_args):
     if unknown_args:
         pipeline_cmd += " " + " ".join(unknown_args)
 
-    # Generate startup script
+    # Generate startup script that uses Docker
     startup_script = f'''#!/bin/bash
 set -euo pipefail
 
@@ -189,8 +154,7 @@ exec > >(tee -a "${{LOG_FILE}}") 2>&1
 echo "$(date): Starting olmocr setup..."
 
 # Configuration
-TARBALL_GCS_PATH="{tarball_gcs_path}"
-WORKSPACE_DIR="/opt/olmocr"
+DOCKER_IMAGE="{docker_image}"
 
 # Wait for GPU to be available
 echo "$(date): Waiting for GPU..."
@@ -204,33 +168,39 @@ for i in {{1..30}}; do
     sleep 10
 done
 
-# Install uv
-echo "$(date): Installing uv..."
-curl -LsSf https://astral.sh/uv/install.sh | sh
-source /root/.local/bin/env
+# Install Docker if not present
+if ! command -v docker &> /dev/null; then
+    echo "$(date): Installing Docker..."
+    curl -fsSL https://get.docker.com | sh
+    systemctl start docker
+    systemctl enable docker
+fi
 
-# Create workspace and download source
-mkdir -p "${{WORKSPACE_DIR}}"
-cd "${{WORKSPACE_DIR}}"
+# Install NVIDIA Container Toolkit if not present
+if ! dpkg -l | grep -q nvidia-container-toolkit; then
+    echo "$(date): Installing NVIDIA Container Toolkit..."
+    curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
+    curl -s -L https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list | \\
+        sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' | \\
+        tee /etc/apt/sources.list.d/nvidia-container-toolkit.list
+    apt-get update
+    apt-get install -y nvidia-container-toolkit
+    nvidia-ctk runtime configure --runtime=docker
+    systemctl restart docker
+fi
 
-echo "$(date): Downloading source code from ${{TARBALL_GCS_PATH}}..."
-gsutil cp "${{TARBALL_GCS_PATH}}" source.tar.gz
-tar -xzf source.tar.gz
-rm source.tar.gz
+# Pull the Docker image
+echo "$(date): Pulling Docker image ${{DOCKER_IMAGE}}..."
+docker pull "${{DOCKER_IMAGE}}"
 
-# Create venv and install dependencies
-echo "$(date): Setting up Python environment..."
-uv venv /opt/vllm-env --python 3.12 --seed
-source /opt/vllm-env/bin/activate
-
-# Install the package and vllm
-uv pip install -e . --torch-backend=auto
-
-# Run the pipeline (disable set -e to capture exit code)
-echo "$(date): Starting pipeline..."
-cd "${{WORKSPACE_DIR}}"
+# Run the pipeline in Docker (disable set -e to capture exit code)
+echo "$(date): Starting pipeline in Docker..."
 set +e
-{pipeline_cmd}
+docker run --rm --gpus all \\
+    -e GOOGLE_APPLICATION_CREDENTIALS=/root/.config/gcloud/application_default_credentials.json \\
+    -v /root/.config/gcloud:/root/.config/gcloud:ro \\
+    "${{DOCKER_IMAGE}}" \\
+    {pipeline_cmd}
 PIPELINE_EXIT_CODE=$?
 set -e
 
@@ -245,23 +215,23 @@ if [ $PIPELINE_EXIT_CODE -eq 0 ]; then
     echo "$(date): Pipeline completed successfully, removing instance from MIG..."
 
     # Check if we're the last instance before deleting ourselves
-    MIG_SIZE=$(gcloud compute instance-groups managed describe "$MIG_NAME" \
-        --region="$REGION" \
-        --project="$PROJECT" \
+    MIG_SIZE=$(gcloud compute instance-groups managed describe "$MIG_NAME" \\
+        --region="$REGION" \\
+        --project="$PROJECT" \\
         --format="value(targetSize)" 2>/dev/null || echo "0")
 
-    TEMPLATE_NAME=$(gcloud compute instance-groups managed describe "$MIG_NAME" \
-        --region="$REGION" \
-        --project="$PROJECT" \
+    TEMPLATE_NAME=$(gcloud compute instance-groups managed describe "$MIG_NAME" \\
+        --region="$REGION" \\
+        --project="$PROJECT" \\
         --format="value(instanceTemplate)" 2>/dev/null | xargs basename || echo "")
 
     echo "$(date): Current MIG size: $MIG_SIZE"
 
     # Delete ourselves from the MIG (regional MIG uses --region)
-    gcloud compute instance-groups managed delete-instances "$MIG_NAME" \
-        --instances="$INSTANCE_NAME" \
-        --region="$REGION" \
-        --project="$PROJECT" \
+    gcloud compute instance-groups managed delete-instances "$MIG_NAME" \\
+        --instances="$INSTANCE_NAME" \\
+        --region="$REGION" \\
+        --project="$PROJECT" \\
         --quiet || echo "$(date): Failed to delete instance (may already be deleted)"
 
     # If we were the last instance, clean up MIG and template
@@ -272,15 +242,15 @@ if [ $PIPELINE_EXIT_CODE -eq 0 ]; then
         sleep 30
 
         # Delete the MIG
-        gcloud compute instance-groups managed delete "$MIG_NAME" \
-            --region="$REGION" \
-            --project="$PROJECT" \
+        gcloud compute instance-groups managed delete "$MIG_NAME" \\
+            --region="$REGION" \\
+            --project="$PROJECT" \\
             --quiet || echo "$(date): Failed to delete MIG"
 
         # Delete the instance template
         if [ -n "$TEMPLATE_NAME" ]; then
-            gcloud compute instance-templates delete "$TEMPLATE_NAME" \
-                --project="$PROJECT" \
+            gcloud compute instance-templates delete "$TEMPLATE_NAME" \\
+                --project="$PROJECT" \\
                 --quiet || echo "$(date): Failed to delete template"
         fi
 
@@ -302,6 +272,7 @@ fi
 
     # Create instance template
     logger.info(f"Creating instance template: {template_name}")
+    logger.info(f"Using Docker image: {docker_image}")
     template_cmd = [
         "gcloud", "compute", "instance-templates", "create", template_name,
         f"--project={args.gcp_project}",
@@ -348,6 +319,7 @@ fi
     print(f"  Region: {region}")
     print(f"  Instances: {args.gcp_instances}")
     print(f"  GPU Type: {args.gcp_gpu_type}")
+    print(f"  Docker Image: {docker_image}")
     print(f"  Distribution Shape: ANY")
     print(f"\nAuto-cleanup: Instances self-delete when done. Last instance deletes MIG and template.")
     print(f"\nTo monitor instances:")
