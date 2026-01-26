@@ -409,7 +409,7 @@ async def process_dolma_document(args, dolma_doc, sem):
         return result_attributes
     else:
         # Document without pdf_page_numbers - sample first N characters
-        SAMPLE_LENGTH = 2000
+        SAMPLE_LENGTH = 1000
         sample_text = text[:SAMPLE_LENGTH]
         text_length = len(text)
         span_end = min(SAMPLE_LENGTH, text_length)
