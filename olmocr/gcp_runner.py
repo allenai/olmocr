@@ -239,7 +239,7 @@ set +e
 docker run --rm --gpus all \\
     -e GOOGLE_APPLICATION_CREDENTIALS=/root/.config/gcloud/application_default_credentials.json \\
     -v /root/.config/gcloud:/root/.config/gcloud:ro \\
-    -v "$OLMOCR_DIR/olmocr:/app/olmocr:ro" \\
+    -v "$OLMOCR_DIR:/build" \\
     "${{DOCKER_IMAGE}}" \\
     -c "{pipeline_cmd}"
 PIPELINE_EXIT_CODE=$?
