@@ -24,14 +24,42 @@ logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
 
 
-def parse_s3_path(s3_path: str) -> tuple[str, str]:
-    if not (s3_path.startswith("s3://") or s3_path.startswith("gs://") or s3_path.startswith("weka://")):
-        raise ValueError("s3_path must start with s3://, gs://, or weka://")
-    parsed = urlparse(s3_path)
+# ============ Path Type Helper Functions ============
+
+
+def is_s3_path(path: str) -> bool:
+    """Check if path is an S3 or Weka path (both use boto3)."""
+    return path.startswith("s3://") or path.startswith("weka://")
+
+
+def is_gcs_path(path: str) -> bool:
+    """Check if path is a GCS path."""
+    return path.startswith("gs://")
+
+
+def is_cloud_path(path: str) -> bool:
+    """Check if path is any cloud storage path."""
+    return is_s3_path(path) or is_gcs_path(path)
+
+
+def parse_cloud_path(cloud_path: str) -> tuple[str, str]:
+    """Parse a cloud storage path into bucket and key components.
+
+    Supports s3://, gs://, and weka:// prefixes.
+    """
+    if not (cloud_path.startswith("s3://") or cloud_path.startswith("gs://") or cloud_path.startswith("weka://")):
+        raise ValueError("cloud_path must start with s3://, gs://, or weka://")
+    parsed = urlparse(cloud_path)
     bucket = parsed.netloc
     key = parsed.path.lstrip("/")
 
     return bucket, key
+
+
+# Backwards compatibility alias
+def parse_s3_path(s3_path: str) -> tuple[str, str]:
+    """Backwards compatibility alias for parse_cloud_path."""
+    return parse_cloud_path(s3_path)
 
 
 def expand_s3_glob(s3_client, s3_glob: str) -> dict[str, str]:
@@ -86,10 +114,11 @@ def expand_s3_glob(s3_client, s3_glob: str) -> dict[str, str]:
 
 
 def get_s3_bytes(s3_client, s3_path: str, start_index: Optional[int] = None, end_index: Optional[int] = None) -> bytes:
-    is_cloud_path = s3_path.startswith("s3://") or s3_path.startswith("gs://") or s3_path.startswith("weka://")
+    """Download bytes from an S3 or Weka path (both use boto3)."""
+    is_s3_or_weka = is_s3_path(s3_path)
 
     # Fall back for local files
-    if not is_cloud_path:
+    if not is_s3_or_weka:
         if os.path.exists(s3_path):
             assert start_index is None and end_index is None, "Range query not supported yet"
             with open(s3_path, "rb") as f:
@@ -425,19 +454,20 @@ def expand_gcs_glob(gcs_client, gcs_glob: str) -> dict[str, str]:
 
     bucket_name = parsed.netloc
     raw_path = parsed.path.lstrip("/")
-    prefix = posixpath.dirname(raw_path)
-    pattern = posixpath.basename(raw_path)
 
     bucket = gcs_client.bucket(bucket_name)
 
-    # Case 1: We have a wildcard
-    if any(wc in pattern for wc in ["*", "?", "[", "]"]):
-        if prefix and not prefix.endswith("/"):
-            prefix += "/"
+    # Case 1: We have a wildcard - find the longest fixed prefix before any wildcard
+    # Note: '?' is supported for GCS glob patterns
+    if any(wc in raw_path for wc in ["*", "?", "[", "]"]):
+        # Find the first wildcard character and use everything before it as the GCS prefix
+        first_wildcard = min((raw_path.index(wc) for wc in ["*", "?", "[", "]"] if wc in raw_path))
+        prefix = raw_path[:first_wildcard]
+
         blobs = bucket.list_blobs(prefix=prefix)
         matched = {}
         for blob in blobs:
-            if glob.fnmatch.fnmatch(blob.name, posixpath.join(prefix, pattern)):
+            if glob.fnmatch.fnmatch(blob.name, raw_path):
                 # Use md5_hash if available, otherwise use crc32c
                 hash_val = blob.md5_hash or blob.crc32c or ""
                 matched[f"gs://{bucket_name}/{blob.name}"] = hash_val
@@ -458,17 +488,55 @@ def expand_gcs_glob(gcs_client, gcs_glob: str) -> dict[str, str]:
     raise ValueError(f"No object or prefix found at '{gcs_glob}'. Check your path or add a wildcard.")
 
 
-def get_gcs_bytes(gcs_client, gcs_path: str) -> bytes:
-    """Download bytes from a GCS path."""
-    bucket_name, key = parse_s3_path(gcs_path)
+def get_gcs_bytes(gcs_client, gcs_path: str, start_index: Optional[int] = None, end_index: Optional[int] = None) -> bytes:
+    """Download bytes from a GCS path with optional range query support.
+
+    Raises:
+        FileNotFoundError: If the object doesn't exist in GCS
+    """
+    from google.api_core.exceptions import NotFound
+
+    bucket_name, key = parse_cloud_path(gcs_path)
     bucket = gcs_client.bucket(bucket_name)
     blob = bucket.blob(key)
-    return blob.download_as_bytes()
+    try:
+        return blob.download_as_bytes(start=start_index, end=end_index)
+    except NotFound:
+        raise FileNotFoundError(f"GCS object not found: {gcs_path}")
+
+
+def get_gcs_bytes_with_backoff(gcs_client, gcs_path: str, max_retries: int = 8, backoff_factor: int = 2) -> bytes:
+    """Download bytes from a GCS path with exponential backoff retry logic.
+
+    Raises:
+        FileNotFoundError: If the object doesn't exist in GCS (not retried)
+        PermissionError: If access is forbidden (not retried)
+    """
+    from google.api_core.exceptions import Forbidden
+
+    attempt = 0
+    while attempt < max_retries:
+        try:
+            return get_gcs_bytes(gcs_client, gcs_path)
+        except (FileNotFoundError, PermissionError):
+            # Don't retry these - they won't succeed on retry
+            raise
+        except Forbidden as e:
+            # Convert to standard PermissionError
+            raise PermissionError(f"GCS access forbidden: {gcs_path}") from e
+        except Exception as e:
+            wait_time = backoff_factor**attempt
+            logger.warning(f"Attempt {attempt + 1} failed for {gcs_path}: {e}. Retrying in {wait_time}s...")
+            time.sleep(wait_time)
+            attempt += 1
+
+    logger.error(f"Failed to get_gcs_bytes for {gcs_path} after {max_retries} retries.")
+    raise Exception(f"Failed to get_gcs_bytes for {gcs_path} after {max_retries} retries")
 
 
 def put_gcs_bytes(gcs_client, gcs_path: str, data: bytes):
     """Upload bytes to a GCS path."""
-    bucket_name, key = parse_s3_path(gcs_path)
+    bucket_name, key = parse_cloud_path(gcs_path)
     bucket = gcs_client.bucket(bucket_name)
     blob = bucket.blob(key)
     blob.upload_from_string(data, content_type="application/octet-stream")
@@ -476,6 +544,8 @@ def put_gcs_bytes(gcs_client, gcs_path: str, data: bytes):
 
 def download_zstd_csv_gcs(gcs_client, gcs_path: str) -> List[str]:
     """Download and decompress a .zstd CSV file from GCS."""
+    from google.api_core.exceptions import NotFound
+
     try:
         compressed_data = get_gcs_bytes(gcs_client, gcs_path)
         dctx = zstd.ZstdDecompressor()
@@ -484,12 +554,9 @@ def download_zstd_csv_gcs(gcs_client, gcs_path: str) -> List[str]:
         lines = text_stream.readlines()
         logger.info(f"Downloaded and decompressed {gcs_path}")
         return lines
-    except Exception as e:
-        # GCS raises google.cloud.exceptions.NotFound for missing objects
-        if "NotFound" in str(type(e).__name__) or "404" in str(e):
-            logger.info(f"No existing {gcs_path} found in GCS, starting fresh.")
-            return []
-        raise
+    except NotFound:
+        logger.info(f"No existing {gcs_path} found in GCS, starting fresh.")
+        return []
 
 
 def upload_zstd_csv_gcs(gcs_client, gcs_path: str, lines: List[str]):
@@ -499,3 +566,94 @@ def upload_zstd_csv_gcs(gcs_client, gcs_path: str, lines: List[str]):
     compressed = compressor.compress(joined_text.encode("utf-8"))
     put_gcs_bytes(gcs_client, gcs_path, compressed)
     logger.info(f"Uploaded compressed {gcs_path}")
+
+
+# ============ Unified Cloud Interface Functions ============
+
+
+def get_cloud_bytes(
+    path: str,
+    s3_client=None,
+    gcs_client=None,
+    start_index: Optional[int] = None,
+    end_index: Optional[int] = None,
+) -> bytes:
+    """Download bytes from any cloud path or local file.
+
+    Args:
+        path: Local file path, s3://, gs://, or weka:// path
+        s3_client: boto3 S3 client (required for s3:// or weka:// paths)
+        gcs_client: GCS storage client (required for gs:// paths)
+        start_index: Optional start byte for range query
+        end_index: Optional end byte for range query
+
+    Returns:
+        bytes: The file contents
+
+    Raises:
+        ValueError: If required client is not provided for cloud paths
+        FileNotFoundError: If local file doesn't exist
+    """
+    if not is_cloud_path(path):
+        if os.path.exists(path):
+            with open(path, "rb") as f:
+                if start_index is not None or end_index is not None:
+                    if start_index is not None:
+                        f.seek(start_index)
+                    if end_index is not None:
+                        return f.read(end_index - (start_index or 0) + 1)
+                return f.read()
+        else:
+            raise FileNotFoundError(f"Could not find local file {path}")
+
+    if is_gcs_path(path):
+        if gcs_client is None:
+            raise ValueError("gcs_client required for gs:// paths")
+        return get_gcs_bytes(gcs_client, path, start_index, end_index)
+
+    # S3 or Weka path
+    if s3_client is None:
+        raise ValueError("s3_client required for s3:// or weka:// paths")
+    return get_s3_bytes(s3_client, path, start_index, end_index)
+
+
+def get_cloud_bytes_with_backoff(
+    path: str,
+    s3_client=None,
+    gcs_client=None,
+    max_retries: int = 8,
+    backoff_factor: int = 2,
+) -> bytes:
+    """Download bytes with exponential backoff, works for any path type.
+
+    Args:
+        path: Local file path, s3://, gs://, or weka:// path
+        s3_client: boto3 S3 client (required for s3:// or weka:// paths)
+        gcs_client: GCS storage client (required for gs:// paths)
+        max_retries: Maximum number of retry attempts
+        backoff_factor: Multiplier for exponential backoff
+
+    Returns:
+        bytes: The file contents
+
+    Raises:
+        ValueError: If required client is not provided for cloud paths
+        FileNotFoundError: If local file doesn't exist
+        Exception: If all retries are exhausted
+    """
+    if not is_cloud_path(path):
+        if os.path.exists(path):
+            with open(path, "rb") as f:
+                return f.read()
+        else:
+            raise FileNotFoundError(f"Could not find local file {path}")
+
+    if is_gcs_path(path):
+        if gcs_client is None:
+            raise ValueError("gcs_client required for gs:// paths")
+        return get_gcs_bytes_with_backoff(gcs_client, path, max_retries, backoff_factor)
+
+    # S3 or Weka path
+    if s3_client is None:
+        raise ValueError("s3_client required for s3:// or weka:// paths")
+    return get_s3_bytes_with_backoff(s3_client, path, max_retries, backoff_factor)

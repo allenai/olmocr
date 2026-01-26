@@ -44,9 +44,11 @@ from olmocr.cloud_utils import (
     download_zstd_csv,
     expand_gcs_glob,
     expand_s3_glob,
+    get_cloud_bytes_with_backoff,
     get_gcs_bytes,
     get_s3_bytes,
     get_s3_bytes_with_backoff,
+    is_gcs_path,
     parse_s3_path,
 )
 from olmocr.train.dataloader import FrontMatterParser
@@ -75,6 +77,7 @@ logging.getLogger("pypdf").setLevel(logging.ERROR)
 # Global s3 clients fo the whole script, we have two separate ones in case your workspace and your pdfs are in different accounts
 workspace_s3 = boto3.client("s3")
 pdf_s3 = boto3.client("s3")
+pdf_gcs = None  # Initialized lazily when needed
 
 # Global variables for token statistics
 metrics = MetricsKeeper(window=60 * 5)
@@ -487,7 +490,7 @@ async def process_tarball(args, worker_id: int, tarball_path: str) -> list:
     """Process all PDFs inside a tarball concurrently and return list of Dolma documents."""
     logger.info(f"Worker {worker_id} processing tarball {tarball_path}")
 
-    tarball_bytes = await asyncio.to_thread(lambda: get_s3_bytes_with_backoff(pdf_s3, tarball_path))
+    tarball_bytes = await asyncio.to_thread(lambda: get_cloud_bytes_with_backoff(tarball_path, s3_client=pdf_s3, gcs_client=pdf_gcs))
 
     # Extract all PDFs to a temp directory
     temp_dir = tempfile.mkdtemp()
@@ -574,18 +577,20 @@ async def process_single_pdf(args, worker_id: int, pdf_orig_path: str, local_pdf
 
 
 async def process_pdf(args, worker_id: int, pdf_orig_path: str):
-    """Process a single PDF from S3/local path and return a Dolma document."""
+    """Process a single PDF from S3/GCS/local path and return a Dolma document."""
     with tempfile.NamedTemporaryFile("wb+", suffix=".pdf", delete=False) as tf:
         try:
-            data = await asyncio.to_thread(lambda: get_s3_bytes_with_backoff(pdf_s3, pdf_orig_path))
+            data = await asyncio.to_thread(lambda: get_cloud_bytes_with_backoff(pdf_orig_path, s3_client=pdf_s3, gcs_client=pdf_gcs))
             tf.write(data)
             tf.flush()
         except ClientError as ex:
             if ex.response["Error"]["Code"] == "NoSuchKey":
-                logger.info(f"S3 File Not found, skipping it completely {pdf_orig_path}")
+                logger.info(f"S3 file not found, skipping: {pdf_orig_path}")
                 return None
-            else:
-                raise
+            raise
+        except FileNotFoundError:
+            logger.info(f"File not found, skipping: {pdf_orig_path}")
+            return None
 
         if is_png(tf.name) or is_jpeg(tf.name):
             logger.info(f"Converting {pdf_orig_path} from image to PDF format...")
@@ -1167,7 +1172,7 @@ async def main():
     )
 
     use_internal_server = not args.server
-    global workspace_s3, pdf_s3, max_concurrent_requests_limit
+    global workspace_s3, pdf_s3, pdf_gcs, max_concurrent_requests_limit
 
     max_concurrent_requests_limit = asyncio.BoundedSemaphore(args.max_concurrent_requests)
 
@@ -1223,11 +1228,13 @@ async def main():
                 pdf_work_paths.update(p for p in expanded_paths if not is_tarball_path(p))
             elif pdf_path.startswith("gs://"):
                 logger.info(f"Expanding gcs glob at {pdf_path}")
-                if workspace_gcs is None:
+                if pdf_gcs is None:
                     from google.cloud import storage
 
-                    workspace_gcs = storage.Client()
-                expanded_paths = set(expand_gcs_glob(workspace_gcs, pdf_path))
+                    pdf_gcs = storage.Client()
+                    if workspace_gcs is None:
+                        workspace_gcs = pdf_gcs
+                expanded_paths = set(expand_gcs_glob(pdf_gcs, pdf_path))
                 tarball_paths.update(p for p in expanded_paths if is_tarball_path(p))
                 pdf_work_paths.update(p for p in expanded_paths if not is_tarball_path(p))
             elif os.path.exists(pdf_path):
@@ -1272,8 +1279,8 @@ async def main():
                 try:
                     # Download the PDF to a temp file using appropriate client
                     with tempfile.NamedTemporaryFile(suffix=".pdf") as tmp_file:
-                        if pdf.startswith("gs://"):
-                            tmp_file.write(get_gcs_bytes(workspace_gcs, pdf))
+                        if is_gcs_path(pdf):
+                            tmp_file.write(get_gcs_bytes(pdf_gcs or workspace_gcs, pdf))
                         else:
                             tmp_file.write(get_s3_bytes(pdf_s3, pdf))
                         tmp_file.flush()

@@ -200,69 +200,69 @@ docker run --rm --gpus all \\
     -e GOOGLE_APPLICATION_CREDENTIALS=/root/.config/gcloud/application_default_credentials.json \\
     -v /root/.config/gcloud:/root/.config/gcloud:ro \\
     "${{DOCKER_IMAGE}}" \\
-    {pipeline_cmd}
-PIPELINE_EXIT_CODE=$?
-set -e
+    -c "{pipeline_cmd}"
+# PIPELINE_EXIT_CODE=$?
+# set -e
 
-# Get instance metadata
-INSTANCE_NAME=$(curl -s "http://metadata.google.internal/computeMetadata/v1/instance/name" -H "Metadata-Flavor: Google")
-MIG_NAME=$(curl -s "http://metadata.google.internal/computeMetadata/v1/instance/attributes/MIG_NAME" -H "Metadata-Flavor: Google")
-REGION=$(curl -s "http://metadata.google.internal/computeMetadata/v1/instance/attributes/REGION" -H "Metadata-Flavor: Google")
-PROJECT=$(curl -s "http://metadata.google.internal/computeMetadata/v1/instance/attributes/PROJECT" -H "Metadata-Flavor: Google")
+# # Get instance metadata
+# INSTANCE_NAME=$(curl -s "http://metadata.google.internal/computeMetadata/v1/instance/name" -H "Metadata-Flavor: Google")
+# MIG_NAME=$(curl -s "http://metadata.google.internal/computeMetadata/v1/instance/attributes/MIG_NAME" -H "Metadata-Flavor: Google")
+# REGION=$(curl -s "http://metadata.google.internal/computeMetadata/v1/instance/attributes/REGION" -H "Metadata-Flavor: Google")
+# PROJECT=$(curl -s "http://metadata.google.internal/computeMetadata/v1/instance/attributes/PROJECT" -H "Metadata-Flavor: Google")
 
-if [ $PIPELINE_EXIT_CODE -eq 0 ]; then
-    # Success - remove instance from MIG (won't be replaced)
-    echo "$(date): Pipeline completed successfully, removing instance from MIG..."
+# if [ $PIPELINE_EXIT_CODE -eq 0 ]; then
+#     # Success - remove instance from MIG (won't be replaced)
+#     echo "$(date): Pipeline completed successfully, removing instance from MIG..."
 
-    # Check if we're the last instance before deleting ourselves
-    MIG_SIZE=$(gcloud compute instance-groups managed describe "$MIG_NAME" \\
-        --region="$REGION" \\
-        --project="$PROJECT" \\
-        --format="value(targetSize)" 2>/dev/null || echo "0")
+#     # Check if we're the last instance before deleting ourselves
+#     MIG_SIZE=$(gcloud compute instance-groups managed describe "$MIG_NAME" \\
+#         --region="$REGION" \\
+#         --project="$PROJECT" \\
+#         --format="value(targetSize)" 2>/dev/null || echo "0")
 
-    TEMPLATE_NAME=$(gcloud compute instance-groups managed describe "$MIG_NAME" \\
-        --region="$REGION" \\
-        --project="$PROJECT" \\
-        --format="value(instanceTemplate)" 2>/dev/null | xargs basename || echo "")
+#     TEMPLATE_NAME=$(gcloud compute instance-groups managed describe "$MIG_NAME" \\
+#         --region="$REGION" \\
+#         --project="$PROJECT" \\
+#         --format="value(instanceTemplate)" 2>/dev/null | xargs basename || echo "")
 
-    echo "$(date): Current MIG size: $MIG_SIZE"
+#     echo "$(date): Current MIG size: $MIG_SIZE"
 
-    # Delete ourselves from the MIG (regional MIG uses --region)
-    gcloud compute instance-groups managed delete-instances "$MIG_NAME" \\
-        --instances="$INSTANCE_NAME" \\
-        --region="$REGION" \\
-        --project="$PROJECT" \\
-        --quiet || echo "$(date): Failed to delete instance (may already be deleted)"
+#     # Delete ourselves from the MIG (regional MIG uses --region)
+#     gcloud compute instance-groups managed delete-instances "$MIG_NAME" \\
+#         --instances="$INSTANCE_NAME" \\
+#         --region="$REGION" \\
+#         --project="$PROJECT" \\
+#         --quiet || echo "$(date): Failed to delete instance (may already be deleted)"
 
-    # If we were the last instance, clean up MIG and template
-    if [ "$MIG_SIZE" -eq 1 ]; then
-        echo "$(date): Last instance - cleaning up MIG and template..."
+#     # If we were the last instance, clean up MIG and template
+#     if [ "$MIG_SIZE" -eq 1 ]; then
+#         echo "$(date): Last instance - cleaning up MIG and template..."
 
-        # Wait for our deletion to complete
-        sleep 30
+#         # Wait for our deletion to complete
+#         sleep 30
 
-        # Delete the MIG
-        gcloud compute instance-groups managed delete "$MIG_NAME" \\
-            --region="$REGION" \\
-            --project="$PROJECT" \\
-            --quiet || echo "$(date): Failed to delete MIG"
+#         # Delete the MIG
+#         gcloud compute instance-groups managed delete "$MIG_NAME" \\
+#             --region="$REGION" \\
+#             --project="$PROJECT" \\
+#             --quiet || echo "$(date): Failed to delete MIG"
 
-        # Delete the instance template
-        if [ -n "$TEMPLATE_NAME" ]; then
-            gcloud compute instance-templates delete "$TEMPLATE_NAME" \\
-                --project="$PROJECT" \\
-                --quiet || echo "$(date): Failed to delete template"
-        fi
+#         # Delete the instance template
+#         if [ -n "$TEMPLATE_NAME" ]; then
+#             gcloud compute instance-templates delete "$TEMPLATE_NAME" \\
+#                 --project="$PROJECT" \\
+#                 --quiet || echo "$(date): Failed to delete template"
+#         fi
 
-        echo "$(date): Cleanup complete"
-    else
-        echo "$(date): Instance deletion requested, $((MIG_SIZE - 1)) instances remaining"
-    fi
-else
-    # Error - shutdown and let MIG create a replacement to retry
-    echo "$(date): Pipeline failed with exit code $PIPELINE_EXIT_CODE, shutting down for retry..."
-    shutdown -h now
-fi
+#         echo "$(date): Cleanup complete"
+#     else
+#         echo "$(date): Instance deletion requested, $((MIG_SIZE - 1)) instances remaining"
+#     fi
+# else
+#     # Error - shutdown and let MIG create a replacement to retry
+#     echo "$(date): Pipeline failed with exit code $PIPELINE_EXIT_CODE, shutting down for retry..."
+#     shutdown -h now
+# fi
 '''
 
     # Write startup script to a temp file
