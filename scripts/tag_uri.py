@@ -83,10 +83,10 @@ def _query_uris_batch(db_path: str, hashes: List[str]) -> Dict[str, str]:
     return result
 
 
-def process_file(args: Tuple[Path, Path, str]) -> Tuple[str, int, int, int]:
+def process_file(args: Tuple[Path, Path, str]) -> Tuple[str, int, int, int, List[str]]:
     """Process a single .jsonl.zst file.
 
-    Returns (filename, total_lines, matched_lines, unmatched_lines).
+    Returns (filename, total_lines, matched_lines, unmatched_lines, missing_hashes).
     """
     input_path, output_path, db_path = args
 
@@ -115,12 +115,14 @@ def process_file(args: Tuple[Path, Path, str]) -> Tuple[str, int, int, int]:
     # 3. Annotate each line
     matched = 0
     unmatched = 0
+    missing_hashes: List[str] = []
     for record, h in zip(lines, hashes):
         if h and h in uri_map:
-            record["metadata"]["url"] = uri_map[h]
+            record["url"] = uri_map[h]
             matched += 1
         else:
             unmatched += 1
+            missing_hashes.append(h if h else "<no-hash>")
 
     # 4. Write output
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -129,7 +131,7 @@ def process_file(args: Tuple[Path, Path, str]) -> Tuple[str, int, int, int]:
     with open(output_path, 'wb') as f:
         f.write(cctx.compress(content))
 
-    return input_path.name, len(lines), matched, unmatched
+    return input_path.name, len(lines), matched, unmatched, missing_hashes
 
 
 def main():
@@ -175,6 +177,7 @@ def main():
     total_lines = 0
     total_matched = 0
     total_unmatched = 0
+    all_missing_hashes: List[str] = []
 
     with ProcessPoolExecutor(max_workers=args.workers) as executor:
         futures = {executor.submit(process_file, item): item[0] for item in work_items}
@@ -183,10 +186,13 @@ def main():
             for future in as_completed(futures):
                 filepath = futures[future]
                 try:
-                    name, n_lines, matched, unmatched = future.result()
+                    name, n_lines, matched, unmatched, missing_hashes = future.result()
                     total_lines += n_lines
                     total_matched += matched
                     total_unmatched += unmatched
+                    if missing_hashes:
+                        tqdm.write(f"WARNING: {name}: {unmatched} documents with no URI match")
+                        all_missing_hashes.extend(missing_hashes)
                 except Exception as e:
                     print(f"\nError processing {filepath}: {e}")
                 pbar.update(1)
@@ -202,6 +208,13 @@ def main():
     if total_lines > 0:
         print(f"Match rate:      {total_matched / total_lines * 100:.1f}%")
     print(f"Output written to: {args.output_dir}")
+
+    if all_missing_hashes:
+        print()
+        sample = all_missing_hashes[:20]
+        print(f"Sample missing hashes ({len(sample)} of {len(all_missing_hashes)}):")
+        for h in sample:
+            print(f"  {h}")
 
     return 0
 
