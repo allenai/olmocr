@@ -1,7 +1,8 @@
 # /// script
 # requires-python = ">=3.10"
 # dependencies = [
-#     "tqdm",
+#     "tqdm", 
+#     "zstandard"
 # ]
 # ///
 """
