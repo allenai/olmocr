@@ -1,4 +1,9 @@
-#!/usr/bin/env python3
+# /// script
+# requires-python = ">=3.10"
+# dependencies = [
+#     "tqdm",
+# ]
+# ///
 """
 Annotate JSONL documents with URLs from a SQLite database mapping pdf_hash -> uri.
 
