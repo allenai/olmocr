@@ -487,7 +487,7 @@ fi
             f"--accelerator=count={gpu_config['accelerator_count']},type={gpu_config['accelerator_type']}",
             "--image-family=common-cu128-ubuntu-2204-nvidia-570",
             "--image-project=deeplearning-platform-release",
-            "--boot-disk-size=64GB",
+            "--boot-disk-size=250GB",
             f"--scopes={scopes}",
             f"--metadata={metadata}",
             f"--metadata-from-file=startup-script={startup_script_path}",
