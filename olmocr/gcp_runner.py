@@ -111,7 +111,7 @@ def add_gcp_args(parser):
         "--gcp-gpu-type",
         type=str,
         choices=list(GCP_GPU_CONFIGS.keys()),
-        default="8xH100",
+        default="1xH100",
         help="GPU configuration: 1xH100, 8xH100, or 8xH200",
     )
     gcp_args.add_argument(
