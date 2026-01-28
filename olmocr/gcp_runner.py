@@ -381,8 +381,10 @@ fi
 # Mount the cloned repo over /app/olmocr to override the baked-in code
 echo "$(date): Starting pipeline in Docker..."
 echo "$(date): Command: {pipeline_cmd}"
+ulimit -n 65536
 set +e
 docker run --rm --gpus all \\
+    --ulimit nofile=65536:65536 \\
     -e GOOGLE_APPLICATION_CREDENTIALS=/root/.config/gcloud/application_default_credentials.json \\
     -v /root/.config/gcloud:/root/.config/gcloud:ro \\
     $AWS_MOUNT \\
