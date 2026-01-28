@@ -162,10 +162,6 @@ def submit_gcp_job(args, unknown_args):
     git_branch, git_commit = get_git_info()
     logger.info(f"Using git branch: {git_branch}, commit: {git_commit}")
 
-    # Validate workspace is GCS
-    if not args.workspace.startswith("gs://"):
-        logger.error("GCP jobs require a GCS workspace (gs://...)")
-        sys.exit(1)
 
     # Get GPU config
     gpu_config = GCP_GPU_CONFIGS[args.gcp_gpu_type]
