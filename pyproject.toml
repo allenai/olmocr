@@ -51,7 +51,7 @@ Changelog = "https://github.com/allenai/olmocr/blob/main/CHANGELOG.md"
 
 [project.optional-dependencies]
 gpu = [
-    "vllm==0.11.2"
+    "vllm==0.15.0"
 ]
 
 dev = [
