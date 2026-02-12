@@ -131,6 +131,11 @@ def add_gcp_args(parser):
         action="store_true",
         help="Mount ~/.aws/credentials on GCP instances via Secret Manager",
     )
+    gcp_args.add_argument(
+        "--gcp-hf-token",
+        action="store_true",
+        help="Pass the local Hugging Face token to GCP instances via Secret Manager",
+    )
     return gcp_args
 
 
@@ -280,6 +285,66 @@ def submit_gcp_job(args, unknown_args=None, pipeline_command=None, workspace_pat
 
         logger.info(f"AWS credentials secret created and configured")
 
+    # Create HF token secret if requested
+    hf_secret_name = None
+    if getattr(args, 'gcp_hf_token', False):
+        # Find the HF token from env var or standard file locations
+        hf_token = os.environ.get("HF_TOKEN", "")
+        if not hf_token:
+            for token_path in [
+                os.path.expanduser("~/.cache/huggingface/token"),
+                os.path.expanduser("~/.huggingface/token"),
+            ]:
+                if os.path.exists(token_path):
+                    with open(token_path) as f:
+                        hf_token = f.read().strip()
+                    if hf_token:
+                        break
+
+        if not hf_token:
+            logger.error("No Hugging Face token found. Set HF_TOKEN env var or run `huggingface-cli login`.")
+            sys.exit(1)
+
+        hf_secret_name = f"{base_name}-hf-token"
+
+        logger.info(f"Creating HF token secret: {hf_secret_name}")
+        result = subprocess.run([
+            "gcloud", "secrets", "create", hf_secret_name,
+            f"--project={args.gcp_project}",
+            "--replication-policy=automatic",
+        ], capture_output=True, text=True)
+        if result.returncode != 0:
+            logger.error(f"Failed to create secret: {result.stderr}")
+            sys.exit(1)
+
+        # Add version with token content
+        result = subprocess.run(
+            ["gcloud", "secrets", "versions", "add", hf_secret_name,
+             f"--project={args.gcp_project}", "--data-file=-"],
+            input=hf_token, capture_output=True, text=True,
+        )
+        if result.returncode != 0:
+            logger.error(f"Failed to add secret version: {result.stderr}")
+            sys.exit(1)
+
+        # Grant default compute service account access to the secret
+        project_number = subprocess.run([
+            "gcloud", "projects", "describe", args.gcp_project,
+            "--format=value(projectNumber)",
+        ], capture_output=True, text=True).stdout.strip()
+
+        compute_sa = f"{project_number}-compute@developer.gserviceaccount.com"
+        result = subprocess.run([
+            "gcloud", "secrets", "add-iam-policy-binding", hf_secret_name,
+            f"--project={args.gcp_project}",
+            f"--member=serviceAccount:{compute_sa}",
+            "--role=roles/secretmanager.secretAccessor",
+        ], capture_output=True, text=True)
+        if result.returncode != 0:
+            logger.warning(f"Failed to grant secret access (may already exist): {result.stderr}")
+
+        logger.info(f"HF token secret created and configured")
+
     # Build the pipeline command arguments
     # Remove --gcp flags AND their values since workers will run locally
     args_list = []
@@ -289,7 +354,7 @@ def submit_gcp_job(args, unknown_args=None, pipeline_command=None, workspace_pat
             skip_next = False
             continue
         if arg.startswith("--gcp"):
-            if arg in ("--gcp", "--gcp-aws-credentials"):
+            if arg in ("--gcp", "--gcp-aws-credentials", "--gcp-hf-token"):
                 # store_true flags, no value to skip
                 continue
             elif "=" in arg:
@@ -389,6 +454,16 @@ if [ -n "$AWS_SECRET_NAME" ] && [ "$AWS_SECRET_NAME" != "" ]; then
     echo "$(date): AWS credentials installed"
 fi
 
+# Fetch HF token from Secret Manager if configured
+HF_ENV=""
+HF_SECRET_NAME=$(curl -s "http://metadata.google.internal/computeMetadata/v1/instance/attributes/HF_SECRET_NAME" -H "Metadata-Flavor: Google" 2>/dev/null || echo "")
+if [ -n "$HF_SECRET_NAME" ] && [ "$HF_SECRET_NAME" != "" ]; then
+    echo "$(date): Fetching HF token from Secret Manager..."
+    HF_TOKEN=$(gcloud secrets versions access latest --secret="$HF_SECRET_NAME" --project="$AWS_PROJECT")
+    HF_ENV="-e HF_TOKEN=$HF_TOKEN"
+    echo "$(date): HF token installed"
+fi
+
 # Run the pipeline in Docker with mounted source code
 # Mount the cloned repo over /app/olmocr to override the baked-in code
 echo "$(date): Starting pipeline in Docker..."
@@ -398,8 +473,10 @@ set +e
 docker run --rm --gpus all \\
     --ulimit nofile=65536:65536 \\
     -e GOOGLE_APPLICATION_CREDENTIALS=/root/.config/gcloud/application_default_credentials.json \\
+    -e PYTHONPATH=/build \\
     -v /root/.config/gcloud:/root/.config/gcloud:ro \\
     $AWS_MOUNT \\
+    $HF_ENV \\
     -v "$OLMOCR_DIR:/build" \\
     "${{DOCKER_IMAGE}}" \\
     -c "{pipeline_cmd}"
@@ -488,9 +565,12 @@ fi
         metadata = f"MIG_NAME={mig_name},REGION={region},PROJECT={args.gcp_project},GIT_BRANCH={git_branch},GIT_COMMIT={git_commit}"
         if aws_secret_name:
             metadata += f",AWS_SECRET_NAME={aws_secret_name}"
+        if hf_secret_name:
+            metadata += f",HF_SECRET_NAME={hf_secret_name}"
 
         # Use cloud-platform scope when Secret Manager access is needed, otherwise use specific scopes
-        scopes = "cloud-platform" if aws_secret_name else "storage-rw,logging-write,compute-rw"
+        needs_secrets = aws_secret_name or hf_secret_name
+        scopes = "cloud-platform" if needs_secrets else "storage-rw,logging-write,compute-rw"
 
         template_cmd = [
             "gcloud", "compute", "instance-templates", "create", template_name,
