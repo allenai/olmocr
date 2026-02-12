@@ -153,15 +153,26 @@ def get_git_info():
         sys.exit(1)
 
 
-def submit_gcp_job(args, unknown_args):
-    """Submit a job to GCP using a Managed Instance Group."""
+def submit_gcp_job(args, unknown_args=None, pipeline_command=None, workspace_path=None):
+    """Submit a job to GCP using a Managed Instance Group.
+
+    Args:
+        args: Parsed arguments (must include GCP args from add_gcp_args).
+        unknown_args: Extra arguments to pass through to the pipeline command.
+        pipeline_command: List of command parts for the pipeline
+            (default: ["python", "-m", "olmocr.pipeline"]).
+        workspace_path: Path used for naming the GCP resources.  Falls back to
+            args.workspace or args.scratch when not supplied.
+    """
+    if pipeline_command is None:
+        pipeline_command = ["python", "-m", "olmocr.pipeline"]
+
     # Use latest docker image (without version suffix for dev work)
     docker_image = "alleninstituteforai/olmocr:latest"
 
     # Get current git branch and commit
     git_branch, git_commit = get_git_info()
     logger.info(f"Using git branch: {git_branch}, commit: {git_commit}")
-
 
     # Get GPU config
     gpu_config = GCP_GPU_CONFIGS[args.gcp_gpu_type]
@@ -191,7 +202,8 @@ def submit_gcp_job(args, unknown_args):
     ).stdout.strip()
     # Extract username from email (before @)
     username = gcp_account.split("@")[0] if "@" in gcp_account else "unknown"
-    workspace_name = os.path.basename(args.workspace.rstrip("/"))
+    _workspace = workspace_path or getattr(args, "workspace", None) or getattr(args, "scratch", "unknown")
+    workspace_name = os.path.basename(_workspace.rstrip("/"))
     timestamp = int(time.time())
 
     # Sanitize names for GCP (only lowercase letters, numbers, and hyphens allowed)
@@ -297,7 +309,7 @@ def submit_gcp_job(args, unknown_args):
         )
     ]
 
-    pipeline_cmd = " ".join(["python", "-m", "olmocr.pipeline"] + args_list)
+    pipeline_cmd = " ".join(pipeline_command + args_list)
     if unknown_args:
         pipeline_cmd += " " + " ".join(unknown_args)
 

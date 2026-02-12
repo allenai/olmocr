@@ -35,6 +35,7 @@ from olmocr.cloud_utils import (
     get_s3_bytes_with_backoff,
     parse_s3_path,
 )
+from olmocr.gcp_runner import add_gcp_args, submit_gcp_job
 from olmocr.version import VERSION
 from olmocr.work_queue import LocalBackend, S3Backend, WorkQueue
 
@@ -689,6 +690,10 @@ async def main():
     parser.add_argument("--beaker_priority", type=str, default="normal", help="Beaker priority level for the job")
 
     parser.add_argument("--port", type=int, default=30024, help="Port for Model server")
+
+    # GCP job running
+    add_gcp_args(parser)
+
     args = parser.parse_args()
 
     global SERVER_PORT, workspace_s3, dataset_s3
@@ -741,6 +746,14 @@ async def main():
 
     if args.beaker:
         submit_beaker_job(args)
+        return
+
+    if args.gcp:
+        submit_gcp_job(
+            args,
+            pipeline_command=["python", "/build/scripts/pii/tagging_pipeline.py"],
+            workspace_path=args.scratch,
+        )
         return
 
     # If you get this far, then you are doing inference and need a GPU
