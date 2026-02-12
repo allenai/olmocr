@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """
-Tagging pipeline for Dolma JSONL datasets.
+Rich PII tagging pipeline for JSONL datasets.
 
-For each .jsonl, .jsonl.gz, or .jsonl.ztd file under the dataset/documents folder,
-this script issues a model prompt completion
-collects the yes/no answers, and writes corresponding Dolma attributes JSONL files under
-scratch/attributes/, mirroring the input structure.
+For each .jsonl, .jsonl.gz, or .jsonl.zst file under the input directory,
+this script runs a detailed PII classification prompt on each document and writes
+new .jsonl.zst files to the output directory with classification results
+added directly to the document metadata.
 """
 
 import argparse
@@ -310,104 +310,75 @@ async def apost(url, json_data):
 
 async def process_dolma_document(args, dolma_doc, sem):
     """
-    Query model to detect PII, enforcing a JSON schema.
-
-    Resilient to:
-      • Transport / HTTP errors
-      • Missing or malformed fields in the response
-      • Non-string or None `content`
-      • Bad JSON in the model's answer
-
-    Always returns: (doc_id, contains_pii: bool, text_length: int)
+    Classify a document and merge attribute spans directly into its attributes dict.
+    Returns the modified document.
     """
     text = dolma_doc.get("text", "") or ""
 
-    # Generate attribute key names using model name
     model_prefix = args.model.replace("/", "_")
     language_key_name = f"{model_prefix}_language"
     contains_pii_key_name = f"{model_prefix}_contains_pii"
 
-    # Initialize result attributes with all RichPIIClassification attributes
-    result_attributes = {
-        contains_pii_key_name: [],
-        language_key_name: [],
-        f"{model_prefix}_is_public_document": [],
-        f"{model_prefix}_contains_pii_government_id": [],
-        f"{model_prefix}_contains_pii_financial_info": [],
-        f"{model_prefix}_contains_pii_biometric_data": [],
-        f"{model_prefix}_contains_pii_login_info": [],
-        f"{model_prefix}_contains_identifier_name": [],
-        f"{model_prefix}_contains_identifier_email": [],
-        f"{model_prefix}_contains_identifier_phone_number": [],
-        f"{model_prefix}_contains_identifier_with_address": [],
-        f"{model_prefix}_contains_identifier_with_biographical_info": [],
-        f"{model_prefix}_contains_identifier_with_location_info": [],
-        f"{model_prefix}_contains_identifier_with_employment_info": [],
-        f"{model_prefix}_contains_identifier_with_education_info": [],
-        f"{model_prefix}_contains_identifier_with_medical_info": [],
-    }
+    # All attribute keys we will write
+    attr_keys = [
+        contains_pii_key_name,
+        language_key_name,
+        f"{model_prefix}_is_public_document",
+        f"{model_prefix}_contains_pii_government_id",
+        f"{model_prefix}_contains_pii_financial_info",
+        f"{model_prefix}_contains_pii_biometric_data",
+        f"{model_prefix}_contains_pii_login_info",
+        f"{model_prefix}_contains_identifier_name",
+        f"{model_prefix}_contains_identifier_email",
+        f"{model_prefix}_contains_identifier_phone_number",
+        f"{model_prefix}_contains_identifier_with_address",
+        f"{model_prefix}_contains_identifier_with_biographical_info",
+        f"{model_prefix}_contains_identifier_with_location_info",
+        f"{model_prefix}_contains_identifier_with_employment_info",
+        f"{model_prefix}_contains_identifier_with_education_info",
+        f"{model_prefix}_contains_identifier_with_medical_info",
+    ]
+
+    result_attributes = {k: [] for k in attr_keys}
+
+    def append_pii_class_spans(start_pos, end_pos, pii_class):
+        result_attributes[contains_pii_key_name].append([start_pos, end_pos, pii_class.contains_any_pii()])
+        result_attributes[language_key_name].append([start_pos, end_pos, pii_class.primary_language])
+        result_attributes[f"{model_prefix}_is_public_document"].append([start_pos, end_pos, pii_class.is_public_document])
+        result_attributes[f"{model_prefix}_contains_pii_government_id"].append([start_pos, end_pos, pii_class.contains_pii_government_id])
+        result_attributes[f"{model_prefix}_contains_pii_financial_info"].append([start_pos, end_pos, pii_class.contains_pii_financial_info])
+        result_attributes[f"{model_prefix}_contains_pii_biometric_data"].append([start_pos, end_pos, pii_class.contains_pii_biometric_data])
+        result_attributes[f"{model_prefix}_contains_pii_login_info"].append([start_pos, end_pos, pii_class.contains_pii_login_info])
+        result_attributes[f"{model_prefix}_contains_identifier_name"].append([start_pos, end_pos, pii_class.contains_identifier_name])
+        result_attributes[f"{model_prefix}_contains_identifier_email"].append([start_pos, end_pos, pii_class.contains_identifier_email])
+        result_attributes[f"{model_prefix}_contains_identifier_phone_number"].append([start_pos, end_pos, pii_class.contains_identifier_phone_number])
+        result_attributes[f"{model_prefix}_contains_identifier_with_address"].append([start_pos, end_pos, pii_class.contains_identifier_with_address])
+        result_attributes[f"{model_prefix}_contains_identifier_with_biographical_info"].append([start_pos, end_pos, pii_class.contains_identifier_with_biographical_info])
+        result_attributes[f"{model_prefix}_contains_identifier_with_location_info"].append([start_pos, end_pos, pii_class.contains_identifier_with_location_info])
+        result_attributes[f"{model_prefix}_contains_identifier_with_employment_info"].append([start_pos, end_pos, pii_class.contains_identifier_with_employment_info])
+        result_attributes[f"{model_prefix}_contains_identifier_with_education_info"].append([start_pos, end_pos, pii_class.contains_identifier_with_education_info])
+        result_attributes[f"{model_prefix}_contains_identifier_with_medical_info"].append([start_pos, end_pos, pii_class.contains_identifier_with_medical_info])
 
     # If pdf_page_numbers is present, split the text and process each page separately
     if "attributes" in dolma_doc and "pdf_page_numbers" in dolma_doc["attributes"]:
         page_numbers = dolma_doc["attributes"]["pdf_page_numbers"]
 
-        # Filter pages down to actual real content
+        # Filter pages down to actual real content, select just the first page
         selected_page_numbers = [tuple(p) for p in page_numbers if p[0] < p[1]]
-
-        # Select just the first page
         selected_page_numbers = selected_page_numbers[:1]
-
-        # Original select first + 2 more code
-        # first_page_number = selected_page_numbers[0]
-
-        # # Sample 3 pages max per document, but always include the first page, it's a good signal for CV classification
-        # random.shuffle(selected_page_numbers)
-        # selected_page_numbers = selected_page_numbers[:3]
-
-        # if first_page_number not in selected_page_numbers:
-        #     selected_page_numbers[0] = first_page_number
 
         for start_pos, end_pos, page_num in page_numbers:
             if (start_pos, end_pos, page_num) in selected_page_numbers:
                 page_text = text[start_pos:end_pos]
 
-                # Process each page with the semaphore to limit concurrent requests
                 async with sem:
                     pii_class = await _process_single_page(page_text)
 
-                # Add all attributes from RichPIIClassification
-                result_attributes[contains_pii_key_name].append([start_pos, end_pos, pii_class.contains_any_pii()])
-                result_attributes[language_key_name].append([start_pos, end_pos, pii_class.primary_language])
-                result_attributes[f"{model_prefix}_is_public_document"].append([start_pos, end_pos, pii_class.is_public_document])
-                result_attributes[f"{model_prefix}_contains_pii_government_id"].append([start_pos, end_pos, pii_class.contains_pii_government_id])
-                result_attributes[f"{model_prefix}_contains_pii_financial_info"].append([start_pos, end_pos, pii_class.contains_pii_financial_info])
-                result_attributes[f"{model_prefix}_contains_pii_biometric_data"].append([start_pos, end_pos, pii_class.contains_pii_biometric_data])
-                result_attributes[f"{model_prefix}_contains_pii_login_info"].append([start_pos, end_pos, pii_class.contains_pii_login_info])
-                result_attributes[f"{model_prefix}_contains_identifier_name"].append([start_pos, end_pos, pii_class.contains_identifier_name])
-                result_attributes[f"{model_prefix}_contains_identifier_email"].append([start_pos, end_pos, pii_class.contains_identifier_email])
-                result_attributes[f"{model_prefix}_contains_identifier_phone_number"].append([start_pos, end_pos, pii_class.contains_identifier_phone_number])
-                result_attributes[f"{model_prefix}_contains_identifier_with_address"].append([start_pos, end_pos, pii_class.contains_identifier_with_address])
-                result_attributes[f"{model_prefix}_contains_identifier_with_biographical_info"].append(
-                    [start_pos, end_pos, pii_class.contains_identifier_with_biographical_info]
-                )
-                result_attributes[f"{model_prefix}_contains_identifier_with_location_info"].append(
-                    [start_pos, end_pos, pii_class.contains_identifier_with_location_info]
-                )
-                result_attributes[f"{model_prefix}_contains_identifier_with_employment_info"].append(
-                    [start_pos, end_pos, pii_class.contains_identifier_with_employment_info]
-                )
-                result_attributes[f"{model_prefix}_contains_identifier_with_education_info"].append(
-                    [start_pos, end_pos, pii_class.contains_identifier_with_education_info]
-                )
-                result_attributes[f"{model_prefix}_contains_identifier_with_medical_info"].append(
-                    [start_pos, end_pos, pii_class.contains_identifier_with_medical_info]
-                )
+                append_pii_class_spans(start_pos, end_pos, pii_class)
             else:
                 # For pages we don't process, set all attributes to None
                 for attr_key in result_attributes:
                     result_attributes[attr_key].append([start_pos, end_pos, None])
-
-        return result_attributes
     else:
         # Document without pdf_page_numbers - sample first N characters
         SAMPLE_LENGTH = 1000
@@ -418,37 +389,23 @@ async def process_dolma_document(args, dolma_doc, sem):
         async with sem:
             pii_class = await _process_single_page(sample_text)
 
-        # Add all attributes from RichPIIClassification
-        result_attributes[contains_pii_key_name].append([0, span_end, pii_class.contains_any_pii()])
-        result_attributes[language_key_name].append([0, span_end, pii_class.primary_language])
-        result_attributes[f"{model_prefix}_is_public_document"].append([0, span_end, pii_class.is_public_document])
-        result_attributes[f"{model_prefix}_contains_pii_government_id"].append([0, span_end, pii_class.contains_pii_government_id])
-        result_attributes[f"{model_prefix}_contains_pii_financial_info"].append([0, span_end, pii_class.contains_pii_financial_info])
-        result_attributes[f"{model_prefix}_contains_pii_biometric_data"].append([0, span_end, pii_class.contains_pii_biometric_data])
-        result_attributes[f"{model_prefix}_contains_pii_login_info"].append([0, span_end, pii_class.contains_pii_login_info])
-        result_attributes[f"{model_prefix}_contains_identifier_name"].append([0, span_end, pii_class.contains_identifier_name])
-        result_attributes[f"{model_prefix}_contains_identifier_email"].append([0, span_end, pii_class.contains_identifier_email])
-        result_attributes[f"{model_prefix}_contains_identifier_phone_number"].append([0, span_end, pii_class.contains_identifier_phone_number])
-        result_attributes[f"{model_prefix}_contains_identifier_with_address"].append([0, span_end, pii_class.contains_identifier_with_address])
-        result_attributes[f"{model_prefix}_contains_identifier_with_biographical_info"].append(
-            [0, span_end, pii_class.contains_identifier_with_biographical_info]
-        )
-        result_attributes[f"{model_prefix}_contains_identifier_with_location_info"].append([0, span_end, pii_class.contains_identifier_with_location_info])
-        result_attributes[f"{model_prefix}_contains_identifier_with_employment_info"].append([0, span_end, pii_class.contains_identifier_with_employment_info])
-        result_attributes[f"{model_prefix}_contains_identifier_with_education_info"].append([0, span_end, pii_class.contains_identifier_with_education_info])
-        result_attributes[f"{model_prefix}_contains_identifier_with_medical_info"].append([0, span_end, pii_class.contains_identifier_with_medical_info])
+        append_pii_class_spans(0, span_end, pii_class)
 
-        # If the document is longer than the sample, add null spans for the rest
         if text_length > SAMPLE_LENGTH:
             for attr_key in result_attributes:
                 result_attributes[attr_key].append([span_end, text_length, None])
 
-        return result_attributes
+    # Merge new attributes into the document
+    if "attributes" not in dolma_doc:
+        dolma_doc["attributes"] = {}
+    dolma_doc["attributes"].update(result_attributes)
+
+    return dolma_doc
 
 
 async def process_file(args, worker_id: int, file_uri: str):
     """
-    Download a JSONL file, query model per record, and collect attributes.
+    Download a JSONL file, classify each record, and return modified documents.
     """
     # Fetch raw bytes (S3 or local)
     if file_uri.startswith("s3://"):
@@ -467,7 +424,7 @@ async def process_file(args, worker_id: int, file_uri: str):
         file_bytes = raw
 
     lines = file_bytes.decode("utf-8").splitlines()
-    page_tasks = {}
+    tasks = []
 
     # Send all records in parallel, max N queued at a time
     sem = asyncio.Semaphore(args.parallel_requests)
@@ -476,25 +433,17 @@ async def process_file(args, worker_id: int, file_uri: str):
         for line in lines:
             dolma_doc = json.loads(line)
             task = tg.create_task(process_dolma_document(args, dolma_doc, sem))
-            page_tasks[dolma_doc["id"]] = (task, dolma_doc)
+            tasks.append(task)
 
-    logger.info(f"Finished taskgroup with {len(page_tasks)} items for {file_uri}")
+    logger.info(f"Finished taskgroup with {len(tasks)} items for {file_uri}")
 
-    # Collect results and build attributes
-    attributes = []
-    for doc_id, (task, dolma_doc) in page_tasks.items():
-        doc_attributes = task.result()
-
-        attributes.append({"id": doc_id, "attributes": doc_attributes})
-
-    return attributes
+    return [task.result() for task in tasks]
 
 
 async def worker(args, work_queue: WorkQueue, semaphore: asyncio.Semaphore, worker_id: int):
     """
-    Pop work-items off the queue, run PII tagging, write the attributes file
-    next to the dataset (keeping the original compression), mark the item done,
-    and drop an empty sentinel file in <workspace>/results/.
+    Pop work-items off the queue, run classification, write modified JSONL.zst
+    to output_dir, mark the item done, and drop an empty sentinel in scratch/results/.
     """
     while True:
         await semaphore.acquire()
@@ -509,46 +458,43 @@ async def worker(args, work_queue: WorkQueue, semaphore: asyncio.Semaphore, work
         logger.info(f"Worker {worker_id} processing {file_uri}")
 
         try:
-            # ------------------------------------------------------------------
-            # Run the per-file pipeline
-            # ------------------------------------------------------------------
-            attributes = await process_file(args, worker_id, file_uri)
+            docs = await process_file(args, worker_id, file_uri)
 
-            # 1. Build the relative path that mirrors documents/…
+            # 1. Build relative path from input_dir
             if file_uri.startswith("s3://"):
                 _, key = parse_s3_path(file_uri)
-                _, docs_prefix = parse_s3_path(args.dataset)
-                rel_path = key[len(os.path.join(docs_prefix, "documents/")) :]
+                _, input_prefix = parse_s3_path(args.input_dir)
+                rel_path = key[len(input_prefix.rstrip("/") + "/"):]
             else:
-                docs_root = os.path.join(args.dataset, "documents")
-                rel_path = os.path.relpath(file_uri, docs_root)
+                rel_path = os.path.relpath(file_uri, args.input_dir)
 
-            out_rel = os.path.join("attributes", args.attribute_name, rel_path)
-            out_jsonl = "\n".join(json.dumps(x) for x in attributes) + "\n"
+            # 2. Strip existing compression suffix, always output as .jsonl.zst
+            base = rel_path
+            for ext in (".gz", ".zst", ".ztd", ".zstd"):
+                if base.endswith(ext):
+                    base = base[: -len(ext)]
+                    break
+            out_rel = base + ".zst" if not base.endswith(".zst") else base
 
-            # 2. Preserve compression type
-            if rel_path.endswith(".gz"):
-                payload = gzip.compress(out_jsonl.encode("utf-8"))
-            elif rel_path.endswith((".zst", ".ztd")):
-                payload = zstd.ZstdCompressor().compress(out_jsonl.encode("utf-8"))
-            else:
-                payload = out_jsonl.encode("utf-8")
+            # 3. Compress as zstd
+            out_jsonl = "\n".join(json.dumps(x) for x in docs) + "\n"
+            payload = zstd.ZstdCompressor().compress(out_jsonl.encode("utf-8"))
 
-            # 3. Write to args.dataset (local or S3)
-            if args.dataset.startswith("s3://"):
-                bucket, prefix = parse_s3_path(args.dataset)
+            # 4. Write to output_dir
+            if args.output_dir.startswith("s3://"):
+                bucket, prefix = parse_s3_path(args.output_dir)
                 key = os.path.join(prefix, out_rel)
                 workspace_s3.put_object(Bucket=bucket, Key=key, Body=payload)
             else:
-                out_path = os.path.join(args.dataset, out_rel)
+                out_path = os.path.join(args.output_dir, out_rel)
                 os.makedirs(os.path.dirname(out_path), exist_ok=True)
                 with open(out_path, "wb") as fh:
                     fh.write(payload)
 
-            # 4. Mark queue item done
+            # 5. Mark queue item done
             await work_queue.mark_done(work_item)
 
-            # 5. Drop empty sentinel file in <workspace>/results/
+            # 6. Drop empty sentinel file in <scratch>/results/
             sentinel_rel = os.path.join("results", f"output_{work_item.hash}.jsonl")
             if args.scratch.startswith("s3://"):
                 bkt, pfx = parse_s3_path(args.scratch)
@@ -838,13 +784,13 @@ def submit_beaker_job(args):
 
 
 async def main():
-    parser = argparse.ArgumentParser(description="Tagging pipeline for Dolma JSONL dataset")
-    parser.add_argument("dataset", help="Dolma dataset root (local or s3://) with documents/ folder")
-    parser.add_argument("scratch", help="Scratch workspace (local dir or s3://)")
+    parser = argparse.ArgumentParser(description="Rich PII tagging pipeline for JSONL datasets")
+    parser.add_argument("input_dir", help="Directory containing .jsonl/.jsonl.gz/.jsonl.zst files (local or s3://)")
+    parser.add_argument("output_dir", help="Directory to write tagged .jsonl.zst output files (local or s3://)")
+    parser.add_argument("scratch", help="Scratch workspace for work queue coordination (local dir or s3://)")
     parser.add_argument("--workers", type=int, default=4, help="Number of concurrent workers")
     parser.add_argument("--parallel_requests", type=int, default=800, help="Max number of parallel requests to send to model")
     parser.add_argument("--model", default="google/gemma-3-12b-it", help="Model path or name, hugging face or local path format")
-    parser.add_argument("--attribute_name", default="model_rich_pii_tagging", help="Path to use for attribute naming")
 
     # Beaker/job running stuff
     parser.add_argument("--beaker", action="store_true", help="Submit this job to beaker instead of running locally")
@@ -898,15 +844,14 @@ async def main():
 
     # Discover input files
     files = set()
-    if args.dataset.startswith("s3://"):
-        pattern = args.dataset.rstrip("/") + "/documents/*.jsonl*"
+    if args.input_dir.startswith("s3://"):
+        pattern = args.input_dir.rstrip("/") + "/*.jsonl*"
         matched = expand_s3_glob(dataset_s3, pattern)
         files = set(matched.keys())
     else:
-        docs_dir = os.path.join(args.dataset, "documents")
-        for root, _, fns in os.walk(docs_dir):
+        for root, _, fns in os.walk(args.input_dir):
             for fn in fns:
-                if fn.endswith((".jsonl", ".jsonl.gz", ".jsonl.ztd")):
+                if fn.endswith((".jsonl", ".jsonl.gz", ".jsonl.zst", ".jsonl.ztd")):
                     files.add(os.path.join(root, fn))
 
     # Populate the work queue if needed
