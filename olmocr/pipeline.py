@@ -181,8 +181,10 @@ async def try_single_page(
                 r"---\nprimary_language: (?:[a-z]{2}|null)\nis_rotation_valid: (?:True|False|true|false)\nrotation_correction: (?:0|90|180|270)\nis_table: (?:True|False|true|false)\nis_diagram: (?:True|False|true|false)\n(?:---|---\n[\s\S]+)"
             )
 
+        timeout_s = getattr(args, "request_timeout_s", None)
+
         async with max_concurrent_requests_limit:
-            status_code, response_body = await apost(COMPLETION_URL, json_data=query, api_key=api_key)
+            status_code, response_body = await apost(COMPLETION_URL, json_data=query, api_key=api_key, timeout_s=timeout_s)
 
         if status_code != 200:
             logger.warning(
@@ -273,8 +275,8 @@ async def try_single_page_with_backoff(
             )
             await asyncio.sleep(sleep_delay)
 
-    logger.error(f"Max backoff attempts reached for {pdf_orig_path}-{page_num}, terminating job")
-    sys.exit(1)
+    logger.error(f"Max backoff attempts reached for {pdf_orig_path}-{page_num}, giving up on page")
+    return None
 
 
 async def process_page(args, worker_id: int, pdf_orig_path: str, pdf_local_path: str, page_num: int) -> PageResult:
@@ -378,7 +380,7 @@ async def process_page(args, worker_id: int, pdf_orig_path: str, pdf_local_path:
 # It feels strange perhaps, but httpx and aiohttp are very complex beasts
 # Ex. the sessionpool in httpcore has 4 different locks in it, and I've noticed
 # that at the scale of 100M+ requests, that they deadlock in different strange ways
-async def apost(url, json_data, api_key=None):
+async def apost(url, json_data, api_key=None, timeout_s=None):
     parsed_url = urlparse(url)
     host = parsed_url.hostname
     # Default to 443 for HTTPS, 80 for HTTP
@@ -392,76 +394,77 @@ async def apost(url, json_data, api_key=None):
 
     writer = None
     try:
-        if use_ssl:
-            ssl_context = ssl.create_default_context()
-            reader, writer = await asyncio.open_connection(host, port, ssl=ssl_context)
-        else:
-            reader, writer = await asyncio.open_connection(host, port)
+        async with asyncio.timeout(timeout_s):
+            if use_ssl:
+                ssl_context = ssl.create_default_context()
+                reader, writer = await asyncio.open_connection(host, port, ssl=ssl_context)
+            else:
+                reader, writer = await asyncio.open_connection(host, port)
 
-        json_payload = json.dumps(json_data)
+            json_payload = json.dumps(json_data)
 
-        headers = [
-            f"POST {path} HTTP/1.1",
-            f"Host: {host}",
-            f"Content-Type: application/json",
-            f"Content-Length: {len(json_payload)}",
-        ]
+            headers = [
+                f"POST {path} HTTP/1.1",
+                f"Host: {host}",
+                f"Content-Type: application/json",
+                f"Content-Length: {len(json_payload)}",
+            ]
 
-        if api_key:
-            headers.append(f"Authorization: Bearer {api_key}")
+            if api_key:
+                headers.append(f"Authorization: Bearer {api_key}")
 
-        headers.append("Connection: close")
+            headers.append("Connection: close")
 
-        request = "\r\n".join(headers) + "\r\n\r\n" + json_payload
-        writer.write(request.encode())
-        await writer.drain()
+            request = "\r\n".join(headers) + "\r\n\r\n" + json_payload
+            writer.write(request.encode())
+            await writer.drain()
 
-        status_line = await reader.readline()
-        if not status_line:
-            raise ConnectionError("No response from server")
-        status_parts = status_line.decode().strip().split(" ", 2)
-        if len(status_parts) < 2:
-            raise ValueError(f"Malformed status line: {status_line.decode().strip()}")
-        status_code = int(status_parts[1])
+            status_line = await reader.readline()
+            if not status_line:
+                raise ConnectionError("No response from server")
+            status_parts = status_line.decode().strip().split(" ", 2)
+            if len(status_parts) < 2:
+                raise ValueError(f"Malformed status line: {status_line.decode().strip()}")
+            status_code = int(status_parts[1])
 
-        # Read headers
-        headers = {}
-        while True:
-            line = await reader.readline()
-            if line in (b"\r\n", b"\n", b""):
-                break
-            key, _, value = line.decode().partition(":")
-            headers[key.strip().lower()] = value.strip()
-
-        # Read response body
-        if "content-length" in headers:
-            body_length = int(headers["content-length"])
-            response_body = await reader.readexactly(body_length)
-        elif headers.get("transfer-encoding", "") == "chunked":
-            chunks = []
+            # Read headers
+            headers = {}
             while True:
-                # Read chunk size line
-                size_line = await reader.readline()
-                chunk_size = int(size_line.strip(), 16)  # Hex format
-
-                if chunk_size == 0:
-                    await reader.readline()  # Read final CRLF
+                line = await reader.readline()
+                if line in (b"\r\n", b"\n", b""):
                     break
+                key, _, value = line.decode().partition(":")
+                headers[key.strip().lower()] = value.strip()
 
-                chunk_data = await reader.readexactly(chunk_size)
-                chunks.append(chunk_data)
+            # Read response body
+            if "content-length" in headers:
+                body_length = int(headers["content-length"])
+                response_body = await reader.readexactly(body_length)
+            elif headers.get("transfer-encoding", "") == "chunked":
+                chunks = []
+                while True:
+                    # Read chunk size line
+                    size_line = await reader.readline()
+                    chunk_size = int(size_line.strip(), 16)  # Hex format
 
-                # Read trailing CRLF after chunk data
-                await reader.readline()
+                    if chunk_size == 0:
+                        await reader.readline()  # Read final CRLF
+                        break
 
-            response_body = b"".join(chunks)
-        elif headers.get("connection", "") == "close":
-            # Read until connection closes
-            response_body = await reader.read()
-        else:
-            raise ConnectionError("Cannot determine response body length")
+                    chunk_data = await reader.readexactly(chunk_size)
+                    chunks.append(chunk_data)
 
-        return status_code, response_body
+                    # Read trailing CRLF after chunk data
+                    await reader.readline()
+
+                response_body = b"".join(chunks)
+            elif headers.get("connection", "") == "close":
+                # Read until connection closes
+                response_body = await reader.read()
+            else:
+                raise ConnectionError("Cannot determine response body length")
+
+            return status_code, response_body
     except Exception as e:
         # Pass through errors
         raise e
@@ -1228,6 +1231,7 @@ async def main():
     parser.add_argument("--target_longest_image_dim", type=int, help="Dimension on longest side to use for rendering the pdf pages", default=1288)
     parser.add_argument("--target_anchor_text_len", type=int, help="Maximum amount of anchor text to use (characters), not used for new models", default=-1)
     parser.add_argument("--guided_decoding", action="store_true", help="Enable guided decoding for model YAML type outputs")
+    parser.add_argument("--request_timeout_s", type=float, default=120, help="Timeout (seconds) for a single HTTP request to the inference server, per attempt")
     parser.add_argument(
         "--disk_logging",
         type=str,

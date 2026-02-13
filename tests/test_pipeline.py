@@ -1,3 +1,4 @@
+import asyncio
 import base64
 import json
 import os
@@ -10,9 +11,11 @@ from PIL import Image
 
 from olmocr.pipeline import (
     PageResult,
+    apost,
     build_page_query,
     get_markdown_path,
     process_page,
+    try_single_page_with_backoff,
 )
 
 
@@ -215,7 +218,7 @@ class TestRotationCorrection:
         # Counter to track number of API calls
         call_count = 0
 
-        async def mock_apost(url, json_data, api_key=None):
+        async def mock_apost(url, json_data, api_key=None, timeout_s=None):
             nonlocal call_count
             call_count += 1
 
@@ -317,7 +320,7 @@ This is the corrected text from the document."""
         # Counter to track number of API calls
         call_count = 0
 
-        async def mock_apost(url, json_data, api_key=None):
+        async def mock_apost(url, json_data, api_key=None, timeout_s=None):
             nonlocal call_count
             call_count += 1
 
@@ -426,7 +429,7 @@ Document is now correctly oriented after 180 degree rotation."""
         # Counter to track number of API calls
         call_count = 0
 
-        async def mock_apost(url, json_data, api_key=None):
+        async def mock_apost(url, json_data, api_key=None, timeout_s=None):
             nonlocal call_count
             call_count += 1
 
@@ -568,3 +571,37 @@ class TestMarkdownPathHandling:
         assert resolved_path.startswith(resolved_workspace), (
             f"BUG: Path traversal attack! Markdown path '{resolved_path}' escapes " f"workspace '{resolved_workspace}'. Paths with ../ should be sanitized."
         )
+
+
+class TestApostTimeout:
+    @pytest.mark.asyncio
+    async def test_apost_times_out_on_stalled_server(self):
+        async def stalled_server(reader, writer):
+            while (await reader.readline()) not in (b"\r\n", b""):
+                pass
+            writer.write(b"HTTP/1.1 200 OK\r\nContent-Length: 999999\r\n\r\n")
+            await writer.drain()
+            await asyncio.sleep(60)
+
+        server = await asyncio.start_server(stalled_server, "127.0.0.1", 0)
+        port = server.sockets[0].getsockname()[1]
+        try:
+            with pytest.raises(TimeoutError):
+                await apost(f"http://127.0.0.1:{port}/v1", json_data={}, timeout_s=0.5)
+        finally:
+            server.close()
+            await server.wait_closed()
+
+
+class TestBackoffNoExit:
+    @pytest.mark.asyncio
+    async def test_max_backoff_returns_none_not_exit(self):
+        args = MockArgs()
+        mock_page = AsyncMock(side_effect=ConnectionError("down"))
+
+        with patch("olmocr.pipeline.try_single_page", mock_page):
+            with patch("asyncio.sleep", new_callable=AsyncMock):
+                result = await try_single_page_with_backoff(args, "t.pdf", "t.pdf", 1, 0, 0)
+
+        assert result is None
+        assert mock_page.call_count == 10
