@@ -418,6 +418,13 @@ fi
 # Install NVIDIA Container Toolkit if not present
 if ! dpkg -l | grep -q nvidia-container-toolkit; then
     echo "$(date): Installing NVIDIA Container Toolkit..."
+    # Wait for unattended-upgrades or other apt processes to finish
+    echo "$(date): Waiting for dpkg lock to be released..."
+    while fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1; do
+        echo "$(date): dpkg lock held, waiting..."
+        sleep 5
+    done
+    echo "$(date): dpkg lock is free"
     curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | gpg --batch --yes --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
     curl -s -L https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list | \\
         sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' | \\
