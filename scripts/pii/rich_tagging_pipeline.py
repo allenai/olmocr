@@ -419,11 +419,11 @@ async def process_file(args, worker_id: int, file_uri: str):
         file_bytes = gzip.decompress(raw)
     elif file_uri.endswith(".ztd") or file_uri.endswith(".zst") or file_uri.endswith(".zstd"):
         dctx = zstd.ZstdDecompressor()
-        file_bytes = dctx.decompress(raw, max_output_size=1_000_000_000)
+        file_bytes = dctx.stream_reader(raw).read()
     else:
         file_bytes = raw
 
-    lines = file_bytes.decode("utf-8").splitlines()
+    lines = [l for l in file_bytes.decode("utf-8").split("\n") if l]
     tasks = []
 
     # Send all records in parallel, max N queued at a time
