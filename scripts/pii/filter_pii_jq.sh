@@ -60,8 +60,8 @@ if [[ -z "$OUTPUT_FOLDER" ]]; then
     exit 1
 fi
 
-INPUT_DOCS="$INPUT_FOLDER/documents"
-OUTPUT_DOCS="$OUTPUT_FOLDER/documents"
+INPUT_DOCS="$INPUT_FOLDER/"
+OUTPUT_DOCS="$OUTPUT_FOLDER/"
 
 if [[ ! -d "$INPUT_DOCS" ]]; then
     echo "Error: documents folder not found at $INPUT_DOCS"
@@ -77,24 +77,25 @@ JQ_FILTER='
 select(
   (
     (
-      (.["google_gemma-3-12b-it_contains_pii"] | map(.[2]) | any(. == true)) and
-      ((.["google_gemma-3-12b-it_is_public_document"] | map(.[2]) | any(. == true)) | not) and
-      ((.["google_gemma-3-4b-it_v2tag__is_academic_paper"] | map(.[2]) | any(. == true)) | not) and
-      ((.["google_gemma-3-4b-it_v2tag__is_textbook"] | map(.[2]) | any(. == true)) | not) and
-      ((.["google_gemma-3-4b-it_v2tag__is_homework_assignment"] | map(.[2]) | any(. == true)) | not) and
-      ((.["google_gemma-3-4b-it_v2tag__is_test_or_quiz"] | map(.[2]) | any(. == true)) | not) and
-      ((.["google_gemma-3-4b-it_v2tag__is_class_syllabus"] | map(.[2]) | any(. == true)) | not) and
-      ((.["google_gemma-3-4b-it_v2tag__is_public_order"] | map(.[2]) | any(. == true)) | not) and
-      ((.["google_gemma-3-4b-it_v2tag__is_news_article"] | map(.[2]) | any(. == true)) | not)
+      (.attributes["google_gemma-3-12b-it_contains_pii"] | map(.[2]) | any(. == true)) and
+      ((.attributes["google_gemma-3-12b-it_is_public_document"] | map(.[2]) | any(. == true)) | not) and
+      ((.attributes["google_gemma-3-4b-it_v2tag__is_academic_paper"] | map(.[2]) | any(. == true)) | not) and
+      ((.attributes["google_gemma-3-4b-it_v2tag__is_textbook"] | map(.[2]) | any(. == true)) | not) and
+      ((.attributes["google_gemma-3-4b-it_v2tag__is_homework_assignment"] | map(.[2]) | any(. == true)) | not) and
+      ((.attributes["google_gemma-3-4b-it_v2tag__is_test_or_quiz"] | map(.[2]) | any(. == true)) | not) and
+      ((.attributes["google_gemma-3-4b-it_v2tag__is_class_syllabus"] | map(.[2]) | any(. == true)) | not) and
+      ((.attributes["google_gemma-3-4b-it_v2tag__is_public_order"] | map(.[2]) | any(. == true)) | not) and
+      ((.attributes["google_gemma-3-4b-it_v2tag__is_news_article"] | map(.[2]) | any(. == true)) | not)
     ) or
     (
-      (.["google_gemma-3-4b-it_v2tag__is_resume_cv"] | map(.[2]) | any(. == true))
+      (.attributes["google_gemma-3-4b-it_v2tag__is_resume_cv"] | map(.[2]) | any(. == true))
     ) or
     (
-      (.["google_gemma-3-4b-it_v2tag__is_court_notice"] | map(.[2]) | any(. == true))
+      (.attributes["google_gemma-3-4b-it_v2tag__is_court_notice"] | map(.[2]) | any(. == true))
     ) or
     (
-      (.["google_gemma-3-4b-it_v2tag__is_completion_certificate"] | map(.[2]) | any(. == true))
+      (.attributes["google_gemma-3-4b-it_v2tag__is_completion_certificate"] | map(.[2]) | any(. == true)) and
+      ((.attributes["google_gemma-3-4b-it_v2tag__is_academic_paper"] | map(.[2]) | any(. == true)) | not)
     )
   ) | not
 )
