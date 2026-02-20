@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Fixed
+
+- Pipeline no longer hangs indefinitely when inference server stalls mid-response ([#433](https://github.com/allenai/olmocr/issues/433))
+- Per-page max backoff now falls back gracefully instead of killing the entire job
+
+### Added
+
+- `--request_timeout_s` CLI flag to control per-request timeout (default 120s)
+
 ## [v0.4.25](https://github.com/allenai/olmocr/releases/tag/v0.4.25) - 2026-01-25
 
 ## [v0.4.24](https://github.com/allenai/olmocr/releases/tag/v0.4.24) - 2026-01-23
