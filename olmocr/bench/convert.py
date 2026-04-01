@@ -25,7 +25,8 @@ def parse_method_arg(method_arg):
     """
     parts = method_arg.split(":")
     name = parts[0]
-    kwargs = {}
+    raw_kwargs = {}
+    last_key = None
     folder_name = name  # Default folder name is the method name
 
     for extra in parts[1:]:
@@ -33,18 +34,26 @@ def parse_method_arg(method_arg):
             key, value = extra.split("=", 1)
             if key == "name":
                 folder_name = value
+                last_key = None
                 continue
 
-            try:
-                converted = int(value)
-            except ValueError:
-                try:
-                    converted = float(value)
-                except ValueError:
-                    converted = value
-            kwargs[key] = converted
+            raw_kwargs[key] = value
+            last_key = key
         else:
-            raise ValueError(f"Extra argument '{extra}' is not in key=value format")
+            if last_key is None:
+                raise ValueError(f"Extra argument '{extra}' is not in key=value format")
+            raw_kwargs[last_key] = f"{raw_kwargs[last_key]}:{extra}"
+
+    kwargs = {}
+    for key, value in raw_kwargs.items():
+        try:
+            converted = int(value)
+        except ValueError:
+            try:
+                converted = float(value)
+            except ValueError:
+                converted = value
+        kwargs[key] = converted
 
     return name, kwargs, folder_name
 
