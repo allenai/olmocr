@@ -27,7 +27,7 @@ async def run_server(
     endpoint_scheme: str = "http",
     endpoint_hostname: str = "localhost",
     endpoint_port: int = 8000,
-    endpoint_path: str = "/v1",
+    endpoint_path: str = "v1",
     model: str = "allenai/olmOCR-7B-0225-preview",
     temperature: float = 0.1,
     target_longest_image_dim: int = 1024,
@@ -66,7 +66,8 @@ async def run_server(
     else:
         raise ValueError("Unknown prompt template")
 
-    endpoint = f"{endpoint_scheme}://{endpoint_hostname}:{str(endpoint_port)}{endpoint_path}",
+    endpoint_path = endpoint_path.lstrip("/")
+    endpoint = f"{endpoint_scheme}://{endpoint_hostname}:{str(endpoint_port)}/{endpoint_path}"
 
     request = {
         "model": model,
