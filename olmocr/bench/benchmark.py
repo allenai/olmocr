@@ -15,10 +15,12 @@ Pairwise permutation tests are conducted between specific candidate pairs.
 
 import argparse
 import glob
+import json
 import os
 import random
 import re
 import sys
+from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Dict, List, Tuple
 
@@ -188,6 +190,7 @@ def main():
     # New arguments
     parser.add_argument("--sample", type=int, default=None, help="Randomly sample N tests to run instead of all tests.")
     parser.add_argument("--test_report", type=str, default=None, help="Generate an HTML report of test results. Provide a filename (e.g., results.html).")
+    parser.add_argument("--json_summary", type=str, default=None, help="Generate a JSON summary of test results. Provide a filename (e.g., summary.json).")
     parser.add_argument(
         "--output_failed", type=str, default=None, help="Output a JSONL file containing tests that failed across all candidates. Provide a filename."
     )
@@ -457,6 +460,94 @@ def main():
             print(f"\nOutput {len(all_failed_tests)} tests that failed across all candidates to {output_path}")
         else:
             print("\nNo tests failed across all candidates. No output file created.")
+
+    if args.json_summary:
+        summary_entries = []
+        for candidate_name, overall_score, total_tests, candidate_errors, test_failures, test_type_breakdown, ci, all_test_scores in summary:
+            type_stats = {}
+            for ttype, scores in test_type_breakdown.items():
+                count = len(scores)
+                avg_pass_rate = sum(scores) / count if count else 0.0
+                type_stats[ttype] = {"average_pass_rate": avg_pass_rate, "num_tests": count}
+
+            jsonl_results = {}
+            for test in all_tests:
+                jsonl_file = test_to_jsonl.get(test.id, "unknown")
+                if jsonl_file not in jsonl_results:
+                    jsonl_results[jsonl_file] = {"total": 0, "passed": 0}
+
+                jsonl_results[jsonl_file]["total"] += 1
+                test_result = None
+                if not candidate_errors and hasattr(test, "pdf") and hasattr(test, "page"):
+                    pdf_name = test.pdf
+                    page = test.page
+                    if pdf_name in test_results_by_candidate.get(candidate_name, {}) and page in test_results_by_candidate[candidate_name].get(pdf_name, {}):
+                        for t, passed, _ in test_results_by_candidate[candidate_name][pdf_name][page]:
+                            if t.id == test.id:
+                                test_result = passed
+                                break
+
+                if test_result:
+                    jsonl_results[jsonl_file]["passed"] += 1
+
+            jsonl_stats = {
+                jsonl_file: {
+                    "pass_rate": (results["passed"] / results["total"]) if results["total"] else 0.0,
+                    "passed": results["passed"],
+                    "total": results["total"],
+                }
+                for jsonl_file, results in jsonl_results.items()
+            }
+
+            summary_entries.append(
+                {
+                    "candidate": candidate_name,
+                    "overall_score": overall_score,
+                    "total_tests": total_tests,
+                    "test_type_stats": type_stats,
+                    "confidence_interval": {"low": ci[0], "high": ci[1]},
+                    "jsonl_breakdown": jsonl_stats,
+                }
+            )
+
+        payload = {
+            "input_folder": input_folder,
+            "jsonl_files": jsonl_files,
+            "params": {
+                "force": args.force,
+                "skip_baseline": args.skip_baseline,
+                "bootstrap_samples": n_bootstrap,
+                "confidence_level": ci_level,
+                "sample": args.sample,
+            },
+            "summary": summary_entries,
+        }
+
+        base_path = Path(args.json_summary)
+        if not base_path.is_absolute():
+            base_path = Path(input_folder) / base_path
+        output_path = base_path
+        if output_path.parent:
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+
+        if output_path.exists():
+            original_path = output_path
+            suffix = 1
+            while output_path.exists():
+                output_path = original_path.with_name(
+                    f"{original_path.stem}_{suffix}{original_path.suffix}"
+                )
+                suffix += 1
+            print(
+                f"Warning: JSON summary already exists at {original_path}. Writing to {output_path} instead."
+            )
+
+        try:
+            with output_path.open("w", encoding="utf-8") as summary_file:
+                json.dump(payload, summary_file, indent=2)
+            print(f"\nJSON summary written to {output_path}")
+        except Exception as e:
+            print(f"Error writing JSON summary to {output_path}: {e}", file=sys.stderr)
 
 
 if __name__ == "__main__":
