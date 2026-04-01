@@ -24,7 +24,10 @@ from olmocr.prompts.prompts import (
 async def run_server(
     pdf_path: str,
     page_num: int = 1,
-    endpoint: str = "http://localhost:8000/v1",
+    scheme: str = "http",
+    hostname: str = "localhost",
+    port: int = 8000,
+    path: str = "/v1",
     model: str = "allenai/olmOCR-7B-0225-preview",
     temperature: float = 0.1,
     target_longest_image_dim: int = 1024,
@@ -79,6 +82,7 @@ async def run_server(
     }
 
     # Make request and get response using httpx
+    endpoint = f"{scheme}://{hostname}:{port}{path}"
     url = f"{endpoint.rstrip('/')}/chat/completions"
 
     async with httpx.AsyncClient(timeout=300) as client:
