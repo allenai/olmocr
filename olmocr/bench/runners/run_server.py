@@ -30,6 +30,7 @@ async def run_server(
     path: str = "/v1",
     model: str = "allenai/olmOCR-7B-0225-preview",
     temperature: float = 0.1,
+    max_tokens: int = 8000,
     target_longest_image_dim: int = 1024,
     prompt_template: Literal["full", "full_no_document_anchoring", "fullv3simple", "finetune_v4_yaml", "basic", "finetune"] = "fullv3simple",
     response_template: Literal["plain", "json"] = "plain",
@@ -78,7 +79,7 @@ async def run_server(
             }
         ],
         "temperature": temperature,
-        "max_tokens": 8000,
+        "max_tokens": max_tokens,
     }
 
     # Make request and get response using httpx
