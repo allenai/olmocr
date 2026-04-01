@@ -24,7 +24,10 @@ from olmocr.prompts.prompts import (
 async def run_server(
     pdf_path: str,
     page_num: int = 1,
-    endpoint: str = "http://localhost:8000/v1",
+    endpoint_scheme: str = "http",
+    endpoint_hostname: str = "localhost",
+    endpoint_port: int = 8000,
+    endpoint_path: str = "v1",
     model: str = "allenai/olmOCR-7B-0225-preview",
     temperature: float = 0.1,
     target_longest_image_dim: int = 1024,
@@ -62,6 +65,9 @@ async def run_server(
         prompt = build_openai_silver_data_prompt_v3_simple(width, height)
     else:
         raise ValueError("Unknown prompt template")
+
+    endpoint_path = endpoint_path.lstrip("/")
+    endpoint = f"{endpoint_scheme}://{endpoint_hostname}:{str(endpoint_port)}/{endpoint_path}"
 
     request = {
         "model": model,
