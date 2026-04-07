@@ -531,16 +531,10 @@ def main():
             output_path.parent.mkdir(parents=True, exist_ok=True)
 
         if output_path.exists():
-            original_path = output_path
-            suffix = 1
-            while output_path.exists():
-                output_path = original_path.with_name(
-                    f"{original_path.stem}_{suffix}{original_path.suffix}"
-                )
-                suffix += 1
             print(
-                f"Warning: JSON summary already exists at {original_path}. Writing to {output_path} instead."
+                f"Warning: JSON summary already exists at {output_path} and will be overwritten."
             )
+
 
         try:
             with output_path.open("w", encoding="utf-8") as summary_file:
