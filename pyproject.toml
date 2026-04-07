@@ -103,6 +103,7 @@ bench = [
     "lxml",
     "flask",
     "wordfreq",
+    "numpy",
 ]
 
 train = [
