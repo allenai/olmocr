@@ -30,6 +30,7 @@ async def run_server(
     target_longest_image_dim: int = 1024,
     prompt_template: Literal["full", "full_no_document_anchoring", "fullv3simple", "finetune_v4_yaml", "basic", "finetune"] = "fullv3simple",
     response_template: Literal["plain", "json"] = "plain",
+    timeout: int = 300,
 ) -> str:
     """
     Convert page of a PDF file to markdown by calling a request
@@ -81,7 +82,7 @@ async def run_server(
     # Make request and get response using httpx
     url = f"{endpoint.rstrip('/')}/chat/completions"
 
-    async with httpx.AsyncClient(timeout=300) as client:
+    async with httpx.AsyncClient(timeout=timeout) as client:
         response = await client.post(url, json=request)
 
         response.raise_for_status()
