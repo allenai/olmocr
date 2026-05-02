@@ -185,6 +185,48 @@ class TestTextPresenceTest(unittest.TestCase):
         result, _ = test.run("This document doesn't have the target")
         self.assertTrue(result)
 
+    def test_present_short_candidate_with_space_query_does_not_falsely_pass(self):
+        """Regression: rapidfuzz.partial_ratio scales by min(len(a), len(b)).
+
+        For very short md_content (e.g. "\\n", which normalize_text collapses
+        to " "), partial_ratio(query_with_space, " ") returns 1.0 because a
+        single space character matches a single space inside the query. With
+        max_diffs=0 the threshold is 1.0, so PRESENT tests for any
+        space-containing query falsely passed. A length guard rejects the
+        match before partial_ratio is consulted.
+        """
+        test = TextPresenceTest(
+            pdf="test.pdf", page=1, id="test_id",
+            type=TestType.PRESENT.value,
+            text="an expression of good will from you",
+        )
+        # Empty content
+        result, _ = test.run("")
+        self.assertFalse(result)
+        # Single newline (parserbench's splitter formerly emitted this for
+        # empty parser output; normalize_text collapses to " ")
+        result, _ = test.run("\n")
+        self.assertFalse(result)
+        # Single space directly
+        result, _ = test.run(" ")
+        self.assertFalse(result)
+        # Short content where a coincidental space would otherwise win
+        result, _ = test.run("a b")
+        self.assertFalse(result)
+
+    def test_absent_short_candidate_with_space_query_does_not_falsely_fail(self):
+        """Mirror of the above for ABSENT — must PASS when md_content is too
+        short to plausibly contain the query.
+        """
+        test = TextPresenceTest(
+            pdf="test.pdf", page=1, id="test_id",
+            type=TestType.ABSENT.value,
+            text="TELEPHONE 478",
+        )
+        for short in ("", "\n", " ", "a b"):
+            result, _ = test.run(short)
+            self.assertTrue(result, f"absent should pass for short md={short!r}")
+
     def test_case_insensitive_present(self):
         """Test that case_sensitive=False works for PRESENT test"""
         test = TextPresenceTest(pdf="test.pdf", page=1, id="test_id", type=TestType.PRESENT.value, text="TARGET TEXT", case_sensitive=False)
