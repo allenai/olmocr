@@ -164,6 +164,28 @@ class TextPresenceTest(BasePDFTest):
         elif self.last_n:
             md_content = md_content[-self.last_n :]
 
+        # Length guard against rapidfuzz.partial_ratio's symmetric behavior.
+        # partial_ratio scales by min(len(a), len(b)) — when md_content is much
+        # shorter than reference_query the metric inverts: e.g.
+        # partial_ratio("a long phrase", " ") = 1.0, because the single space
+        # in md_content matches the single space inside the query. With
+        # max_diffs=0 the threshold is 1.0 so PRESENT falsely passes and
+        # ABSENT falsely fails for any space-containing query whenever a
+        # downstream pipeline emits effectively empty content (e.g. "\n",
+        # which normalize_text collapses to " "). For PRESENT to be plausibly
+        # satisfiable, md_content needs at least len(reference_query) -
+        # max_diffs characters.
+        min_required = len(reference_query) - self.max_diffs
+        if len(md_content) < min_required:
+            if self.type == TestType.PRESENT.value:
+                msg = (
+                    f"Candidate too short ({len(md_content)} chars) to plausibly contain "
+                    f"'{reference_query[:40]}...' (need >= {min_required} chars)"
+                )
+                return False, msg
+            else:  # ABSENT
+                return True, ""
+
         # Threshold for fuzzy matching derived from max_diffs
         threshold = 1.0 - (self.max_diffs / (len(reference_query) if len(reference_query) > 0 else 1))
         best_ratio = fuzz.partial_ratio(reference_query, md_content) / 100.0
