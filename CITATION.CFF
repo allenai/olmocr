@@ -1,0 +1,19 @@
+cff-version: 1.2.0
+message: If you use this software, please cite both the article from preferred-citation and the software itself.
+authors:
+  - family-names: Jake Poznanski
+    given-names: Luca Soldaini
+title: 'olmOCR 2: Unit Test Rewards for Document OCR'
+version: 1.0.0
+url: https://arxiv.org/abs/2510.19817
+date-released: '2025-06-05'
+preferred-citation:
+  authors:
+    - family-names: Jake Poznanski
+      given-names: Luca Soldaini
+  title: 'olmOCR 2: Unit Test Rewards for Document OCR'
+  url: https://arxiv.org/abs/2510.19817
+  type: generic
+  year: '2025'
+  conference: {}
+  publisher: {}
