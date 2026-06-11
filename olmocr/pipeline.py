@@ -21,6 +21,11 @@ from functools import cache
 from io import BytesIO
 from urllib.parse import urlparse
 
+if sys.version_info >= (3, 11):
+    from asyncio import TaskGroup
+else:
+    from taskgroup import TaskGroup  # backport for Python <3.11
+
 import boto3
 import httpx
 from botocore.exceptions import ClientError
@@ -505,7 +510,7 @@ async def process_tarball(args, worker_id: int, tarball_path: str) -> list:
         logger.info(f"Worker {worker_id} extracted {len(pdf_files)} PDFs from {tarball_path}")
 
         # Process all PDFs concurrently
-        async with asyncio.TaskGroup() as tg:
+        async with TaskGroup() as tg:
             tasks = [tg.create_task(process_single_pdf(args, worker_id, src, local)) for src, local in pdf_files]
 
         dolma_docs = [t.result() for t in tasks if t.result() is not None]
@@ -545,7 +550,7 @@ async def process_single_pdf(args, worker_id: int, pdf_orig_path: str, local_pdf
         page_tasks = []
         page_results = []
 
-        async with asyncio.TaskGroup() as tg:
+        async with TaskGroup() as tg:
             for page_num in range(1, num_pages + 1):
                 task = tg.create_task(process_page(args, worker_id, pdf_orig_path, local_pdf_path, page_num))
                 page_tasks.append(task)
@@ -708,7 +713,7 @@ async def worker(args, work_queue: WorkQueue, worker_id):
         await tracker.clear_work(worker_id)
 
         try:
-            async with asyncio.TaskGroup() as tg:
+            async with TaskGroup() as tg:
                 dolma_tasks = []
                 for path in work_item.work_paths:
                     if is_tarball_path(path):

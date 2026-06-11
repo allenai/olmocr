@@ -21,6 +21,11 @@ import time
 from typing import Optional
 from urllib.parse import urlparse
 
+if sys.version_info >= (3, 11):
+    from asyncio import TaskGroup
+else:
+    from taskgroup import TaskGroup  # backport for Python <3.11
+
 import boto3
 import httpx
 import zstandard as zstd
@@ -306,7 +311,7 @@ async def process_file(args, worker_id: int, file_uri: str):
     # Send all records in parallel, max N queued at a time
     sem = asyncio.Semaphore(args.parallel_requests)
 
-    async with asyncio.TaskGroup() as tg:
+    async with TaskGroup() as tg:
         for line in lines:
             dolma_doc = json.loads(line)
             task = tg.create_task(process_dolma_document(args, dolma_doc, sem))

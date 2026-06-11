@@ -18,7 +18,7 @@ classifiers = [
 authors = [
     {name = "Allen Institute for Artificial Intelligence", email = "jakep@allenai.org"}
 ]
-requires-python = ">=3.11"
+requires-python = ">=3.10"
 dependencies = [
   "cached-path",
   "smart_open",
@@ -37,6 +37,7 @@ dependencies = [
   "zstandard",
   "boto3",
   "httpx",
+  "taskgroup; python_version < '3.11'",
 ]
 license = {file = "LICENSE"}
 
@@ -175,7 +176,7 @@ reportPrivateImportUsage = false
 
 [tool.ruff]
 line-length = 160
-target-version = "py311"
+target-version = "py310"
 exclude = ["olmocr/train/molmo", "tests/*"]
 ignore = ["E722", "F541"] #igore bare except, and f string without placeholders
 
