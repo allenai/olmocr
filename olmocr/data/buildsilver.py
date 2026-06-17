@@ -67,7 +67,8 @@ def sample_pdf_pages(num_pages: int, first_n_pages: int, max_sample_pages: int) 
     sample_pages = list(range(1, first_n_pages + 1))  # Always get the first_n_pages
     remaining_pages = list(range(first_n_pages + 1, num_pages + 1))
     if remaining_pages:
-        sample_pages += random.sample(remaining_pages, min(max_sample_pages - first_n_pages, len(remaining_pages)))
+        num_to_sample = max(0, min(max_sample_pages - first_n_pages, len(remaining_pages)))
+        sample_pages += random.sample(remaining_pages, num_to_sample)
     return sample_pages
 
 
