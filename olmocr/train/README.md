@@ -9,7 +9,7 @@ The first step is to setup your python/conda environment, and set things up the 
 Then, add in some extra training requirements:
 
 ```bash
-pip install .[train]
+pip install '.[train]'
 pip install transformers==4.52.4
 pip install flash-attn>=2.8.0.post2 --no-build-isolation
 ```

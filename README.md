@@ -223,7 +223,7 @@ Requirements:
 
 For running inference with your own GPU:
 ```bash
-pip install olmocr[gpu] --extra-index-url https://download.pytorch.org/whl/cu128
+pip install 'olmocr[gpu]' --extra-index-url https://download.pytorch.org/whl/cu128
 
 # Recommended: Install flash infer for faster inference on GPU
 pip install https://download.pytorch.org/whl/cu128/flashinfer/flashinfer_python-0.2.5%2Bcu128torch2.7-cp38-abi3-linux_x86_64.whl
@@ -233,14 +233,14 @@ pip install https://download.pytorch.org/whl/cu128/flashinfer/flashinfer_python-
 
 For submitting jobs to Beaker clusters with the `--beaker` flag:
 ```bash
-pip install olmocr[beaker]
+pip install 'olmocr[beaker]'
 ```
 
 **Option 4: Benchmark Suite**
 
 For running the olmOCR benchmark suite:
 ```bash
-pip install olmocr[bench]
+pip install 'olmocr[bench]'
 ```
 
 **Combined Installation**
@@ -248,10 +248,10 @@ pip install olmocr[bench]
 You can combine multiple options:
 ```bash
 # GPU + Beaker support
-pip install olmocr[gpu,beaker] --extra-index-url https://download.pytorch.org/whl/cu128
+pip install 'olmocr[gpu,beaker]' --extra-index-url https://download.pytorch.org/whl/cu128
 
 # GPU + Benchmark support
-pip install olmocr[gpu,bench] --extra-index-url https://download.pytorch.org/whl/cu128
+pip install 'olmocr[gpu,bench]' --extra-index-url https://download.pytorch.org/whl/cu128
 ```
 
 **Troubleshooting**
@@ -375,7 +375,7 @@ They will automatically start grabbing items from the same workspace queue.
 If you are at Ai2 and want to linearize millions of PDFs efficiently using [beaker](https://www.beaker.org), install with Beaker support:
 
 ```bash
-pip install olmocr[gpu,beaker] --extra-index-url https://download.pytorch.org/whl/cu128
+pip install 'olmocr[gpu,beaker]' --extra-index-url https://download.pytorch.org/whl/cu128
 ```
 
 Then use the `--beaker` flag to prepare the workspace locally and launch N GPU workers in the cluster:

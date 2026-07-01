@@ -284,7 +284,7 @@ git clone https://github.com/allenai/olmocr.git
 cd olmocr
 
 # Install olmocr and the requirements needed to run the benchmark
-pip install -e .[bench]
+pip install -e '.[bench]'
 
 # Configure playwright headless browser to run the math rendering tests
 playwright install chromium
@@ -297,7 +297,7 @@ Convert your documents
 ```bash
 # You will need to install the [gpu] subset of olmocr dependencies to run gpu inference
 # Then convert using using olmocr.bench.convert, see the olmocr/bench/runners directory for options
-pip install olmocr[gpu] --find-links https://flashinfer.ai/whl/cu124/torch2.4/flashinfer/
+pip install 'olmocr[gpu]' --find-links https://flashinfer.ai/whl/cu124/torch2.4/flashinfer/
 python -m olmocr.bench.convert olmocr_pipeline --dir ./olmOCR-bench/bench_data
 
 # OR, you can use the pipeline to convert the benchmark PDFs and move them into the final format
