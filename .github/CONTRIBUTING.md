@@ -83,7 +83,7 @@ When you're ready to contribute code to address an open issue, please follow the
     Once your virtual environment is activated, you can install your local clone in "editable mode" with
 
         pip install -U pip setuptools wheel
-        pip install -e .[dev]
+        pip install -e '.[dev]'
 
     The "editable mode" comes from the `-e` argument to `pip`, and essential just creates a symbolic link from the site-packages directory of your virtual environment to the source code in your local clone. That way any changes you make will be immediately reflected in your virtual environment.
 
