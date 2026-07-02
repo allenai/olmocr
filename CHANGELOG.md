@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+- Fix markdown export on Windows by writing Unicode text with UTF-8 encoding.
+
 ## [v0.4.27](https://github.com/allenai/olmocr/releases/tag/v0.4.27) - 2026-03-12
 
 ## [v0.4.26](https://github.com/allenai/olmocr/releases/tag/v0.4.26) - 2026-03-06
