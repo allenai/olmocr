@@ -1,4 +1,5 @@
 import base64
+import builtins
 import json
 import os
 from dataclasses import dataclass
@@ -10,6 +11,7 @@ from PIL import Image
 
 from olmocr.pipeline import (
     PageResult,
+    _write_markdown_file,
     build_page_query,
     get_markdown_path,
     process_page,
@@ -219,15 +221,9 @@ class TestRotationCorrection:
             nonlocal call_count
             call_count += 1
 
-            # Check the rotation in the request
-            messages = json_data.get("messages", [])
-            if messages:
-                content = messages[0].get("content", [])
-                image_data = content[0].get("image_url", {}).get("url", "")
-
-                # First call - model detects rotation is needed
-                if call_count == 1:
-                    response_content = """---
+            # First call - model detects rotation is needed
+            if call_count == 1:
+                response_content = """---
 primary_language: en
 is_rotation_valid: false
 rotation_correction: 90
@@ -237,9 +233,9 @@ is_diagram: false
 
 This document appears to be rotated and needs correction."""
 
-                # Second call - after rotation, model says it's correct
-                elif call_count == 2:
-                    response_content = """---
+            # Second call - after rotation, model says it's correct
+            elif call_count == 2:
+                response_content = """---
 primary_language: en
 is_rotation_valid: true
 rotation_correction: 0
@@ -253,8 +249,8 @@ Washington, D.C. 20549
 
 This is the corrected text from the document."""
 
-                else:
-                    raise ValueError(f"Unexpected call count: {call_count}")
+            else:
+                raise ValueError(f"Unexpected call count: {call_count}")
 
             # Mock response structure
             response_body = {
@@ -286,8 +282,8 @@ This is the corrected text from the document."""
         # Verify the result
         assert isinstance(result, PageResult)
         assert result.page_num == 1
-        assert result.is_fallback == False
-        assert result.response.is_rotation_valid == True
+        assert result.is_fallback is False
+        assert result.response.is_rotation_valid is True
         assert result.response.rotation_correction == 0
         assert result.response.natural_text is not None
         assert "SECURITIES AND EXCHANGE COMMISSION" in result.response.natural_text
@@ -394,8 +390,8 @@ Document is now correctly oriented after 180 degree rotation."""
         # Verify the result
         assert isinstance(result, PageResult)
         assert result.page_num == 1
-        assert result.is_fallback == False
-        assert result.response.is_rotation_valid == True
+        assert result.is_fallback is False
+        assert result.response.is_rotation_valid is True
         assert result.response.rotation_correction == 0
         assert result.response.natural_text is not None
         assert "180 degree rotation" in result.response.natural_text
@@ -500,8 +496,8 @@ Document correctly oriented at 90 degrees total rotation."""
         # Verify the result
         assert isinstance(result, PageResult)
         assert result.page_num == 1
-        assert result.is_fallback == False
-        assert result.response.is_rotation_valid == True
+        assert result.is_fallback is False
+        assert result.response.is_rotation_valid is True
 
         # Verify that exactly 3 API calls were made
         assert call_count == 3
@@ -515,6 +511,21 @@ Document correctly oriented at 90 degrees total rotation."""
 
 class TestMarkdownPathHandling:
     """Tests for the get_markdown_path function to ensure files stay within workspace."""
+
+    def test_write_markdown_file_uses_utf8_encoding(self, tmp_path):
+        markdown_path = tmp_path / "unicode.md"
+        natural_text = "OCR output with Windows-incompatible Unicode: \u1eca"
+        real_open = builtins.open
+
+        def gbk_default_open(file, mode="r", *args, **kwargs):
+            if "b" not in mode and kwargs.get("encoding") is None:
+                kwargs["encoding"] = "gbk"
+            return real_open(file, mode, *args, **kwargs)
+
+        with patch("builtins.open", side_effect=gbk_default_open):
+            _write_markdown_file(str(markdown_path), natural_text)
+
+        assert markdown_path.read_text(encoding="utf-8") == natural_text
 
     def test_absolute_local_path_stays_in_workspace(self):
         """
@@ -542,7 +553,8 @@ class TestMarkdownPathHandling:
         markdown_path = get_markdown_path(workspace, source_file)
 
         assert markdown_path.startswith(workspace)
-        assert markdown_path == "/tmp/test_workspace/markdown/documents/subfolder/test_document.md"
+        expected_path = os.path.normpath("/tmp/test_workspace/markdown/documents/subfolder/test_document.md")
+        assert os.path.normpath(markdown_path) == expected_path
 
     def test_relative_local_path_stays_in_workspace(self):
         """Test that relative local paths produce markdown paths inside the workspace."""
@@ -552,7 +564,8 @@ class TestMarkdownPathHandling:
         markdown_path = get_markdown_path(workspace, source_file)
 
         assert markdown_path.startswith(workspace)
-        assert markdown_path == "/tmp/test_workspace/markdown/documents/subfolder/test_document.md"
+        expected_path = os.path.normpath("/tmp/test_workspace/markdown/documents/subfolder/test_document.md")
+        assert os.path.normpath(markdown_path) == expected_path
 
     def test_path_traversal_with_dotdot_stays_in_workspace(self):
         """Test that paths with ../ do not escape the workspace directory."""

@@ -695,6 +695,11 @@ def get_markdown_path(workspace: str, source_file: str) -> str:
     return markdown_path
 
 
+def _write_markdown_file(markdown_path: str, natural_text: str) -> None:
+    with open(markdown_path, "w", encoding="utf-8") as md_f:
+        md_f.write(natural_text)
+
+
 async def worker(args, work_queue: WorkQueue, worker_id):
     while True:
 
@@ -775,7 +780,7 @@ async def worker(args, work_queue: WorkQueue, worker_id):
                     # Create the directory structure if it doesn't exist
                     if markdown_path.startswith("s3://"):
                         # For S3 paths, we'll create a temporary file and upload it
-                        with tempfile.NamedTemporaryFile(mode="w+", delete=False) as md_tf:
+                        with tempfile.NamedTemporaryFile(mode="w+", delete=False, encoding="utf-8") as md_tf:
                             md_tf.write(natural_text)
                             md_tf.flush()
                             md_temp_path = md_tf.name
@@ -790,8 +795,7 @@ async def worker(args, work_queue: WorkQueue, worker_id):
                     else:
                         # For local paths, create the directory structure and write the file
                         os.makedirs(markdown_dir, exist_ok=True)
-                        with open(markdown_path, "w") as md_f:
-                            md_f.write(natural_text)
+                        _write_markdown_file(markdown_path, natural_text)
 
             # Update finished token counts from successful documents
             metrics.add_metrics(
