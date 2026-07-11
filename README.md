@@ -549,3 +549,7 @@ For olmOCR v2 Unit Testing Rewards with RL:
       url={https://arxiv.org/abs/2510.19817}, 
 }
 ```
+
+---
+
+*[Mukller](https://github.com/Mukller)*
