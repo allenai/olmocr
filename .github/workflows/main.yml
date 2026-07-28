@@ -264,6 +264,8 @@ jobs:
           context: .
           file: ./Dockerfile
           push: true
+          provenance: mode=max
+          sbom: true
           tags: ${{ steps.meta-base.outputs.tags }}
           labels: ${{ steps.meta-base.outputs.labels }}
           platforms: linux/amd64
@@ -289,6 +291,8 @@ jobs:
           context: .
           file: ./Dockerfile.with-model
           push: true
+          provenance: mode=max
+          sbom: true
           tags: ${{ steps.meta-with-model.outputs.tags }}
           labels: ${{ steps.meta-with-model.outputs.labels }}
           platforms: linux/amd64
