@@ -164,6 +164,8 @@ class TestGRPODataloader(unittest.TestCase):
 
         item = dataset[0]
 
+        mock_prompt.assert_called_once_with(page_num=0)
+
         self.assertIsNotNone(item)
         self.assertIn("prompt", item)
         self.assertIn("pdf_path", item)
