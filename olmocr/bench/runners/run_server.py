@@ -56,7 +56,7 @@ async def run_server(
     elif prompt_template == "basic":
         prompt = build_basic_prompt()
     elif prompt_template == "finetune_v4_yaml":
-        prompt = build_no_anchoring_v4_yaml_prompt()
+        prompt = build_no_anchoring_v4_yaml_prompt(page_num=page_num)
     elif prompt_template == "fullv3simple":
         width, height = get_png_dimensions_from_base64(image_base64)
         prompt = build_openai_silver_data_prompt_v3_simple(width, height)

@@ -136,7 +136,7 @@ async def build_page_query(local_pdf_path: str, page: int, target_longest_image_
             {
                 "role": "user",
                 "content": [
-                    {"type": "text", "text": build_no_anchoring_v4_yaml_prompt()},
+                    {"type": "text", "text": build_no_anchoring_v4_yaml_prompt(page_num=page)},
                     {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{image_base64}"}},
                 ],
             }
