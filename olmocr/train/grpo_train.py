@@ -520,7 +520,7 @@ class OlmOCRBenchDataset(Dataset):
             image = Image.open(BytesIO(image_bytes)).convert("RGB")
 
             # Build the text prompt
-            text_prompt = build_no_anchoring_v4_yaml_prompt()
+            text_prompt = build_no_anchoring_v4_yaml_prompt(page_num=page_num)
 
             # Create messages in the format expected by Qwen2-VL
             messages = [
