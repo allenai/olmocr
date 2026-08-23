@@ -1984,6 +1984,58 @@ class TestFootnoteTest(unittest.TestCase):
         result, _ = test.run(content)
         self.assertTrue(result)
 
+    def test_appears_before_short_text_does_not_falsely_pass(self):
+        """Regression: rapidfuzz.partial_ratio scales by min(len(a), len(b)).
+
+        When the text before the marker cleans down to something much shorter
+        than appears_before_marker (e.g. a single "a"), partial_ratio(target,
+        "a") returns 1.0 because the single character matches a character
+        inside the target. With max_diffs=0 the threshold is 1.0, so the test
+        falsely passed. A length guard rejects the match before partial_ratio
+        is consulted.
+        """
+        test = FootnoteTest(
+            pdf="test.pdf",
+            page=1,
+            id="test_id",
+            type=TestType.FOOTNOTE.value,
+            marker="1",
+            appears_before_marker="an expression of good will from you",
+        )
+
+        # Single character before the marker
+        content = "a[^1] rest of the document."
+        result, explanation = test.run(content)
+        self.assertFalse(result)
+        self.assertIn("not found before", explanation)
+
+        # A few characters, still far too short to contain the target
+        content = "a b[^1] rest of the document."
+        result, _ = test.run(content)
+        self.assertFalse(result)
+
+    def test_appears_after_short_text_does_not_falsely_pass(self):
+        """Mirror of the above for appears_after_marker."""
+        test = FootnoteTest(
+            pdf="test.pdf",
+            page=1,
+            id="test_id",
+            type=TestType.FOOTNOTE.value,
+            marker="1",
+            appears_after_marker="an expression of good will from you",
+        )
+
+        # Single character after the marker
+        content = "Some statement[^1] a"
+        result, explanation = test.run(content)
+        self.assertFalse(result)
+        self.assertIn("not found after", explanation)
+
+        # A few characters, still far too short to contain the target
+        content = "Some statement[^1] a b"
+        result, _ = test.run(content)
+        self.assertFalse(result)
+
     def test_fuzzy_matching_for_appears_before(self):
         """Test fuzzy matching with max_diffs for appears_before_marker"""
         test = FootnoteTest(
