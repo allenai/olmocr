@@ -719,6 +719,15 @@ class FootnoteTest(BasePDFTest):
                     check_length = min(len(clean_text_before), len(clean_target_before) * 2)
                     text_to_check = clean_text_before[-check_length:] if check_length > 0 else clean_text_before
 
+                    # Length guard against rapidfuzz.partial_ratio's symmetric behavior:
+                    # partial_ratio scales by min(len(a), len(b)), so a near-empty
+                    # text_to_check falsely matches almost any target (e.g.
+                    # partial_ratio("a long target", "a") = 1.0). For the target to be
+                    # plausibly present, text_to_check needs at least
+                    # len(clean_target_before) - max_diffs characters.
+                    if len(text_to_check) < len(clean_target_before) - self.max_diffs:
+                        continue
+
                     similarity = fuzz.partial_ratio(clean_target_before, text_to_check) / 100.0
                     if similarity >= threshold:
                         before_found = True
@@ -744,6 +753,15 @@ class FootnoteTest(BasePDFTest):
                     # We'll check the first portion that's roughly the size of our target
                     check_length = min(len(clean_text_after), len(clean_target_after) * 2)
                     text_to_check = clean_text_after[:check_length] if check_length > 0 else clean_text_after
+
+                    # Length guard against rapidfuzz.partial_ratio's symmetric behavior:
+                    # partial_ratio scales by min(len(a), len(b)), so a near-empty
+                    # text_to_check falsely matches almost any target (e.g.
+                    # partial_ratio("a long target", "a") = 1.0). For the target to be
+                    # plausibly present, text_to_check needs at least
+                    # len(clean_target_after) - max_diffs characters.
+                    if len(text_to_check) < len(clean_target_after) - self.max_diffs:
+                        continue
 
                     similarity = fuzz.partial_ratio(clean_target_after, text_to_check) / 100.0
                     if similarity >= threshold:
