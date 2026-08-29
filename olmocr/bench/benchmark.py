@@ -183,7 +183,7 @@ def main():
         "--confidence_level",
         type=float,
         default=0.95,
-        help="Confidence level for interval calculation (default: 0.95 for 95% CI).",
+        help="Confidence level for interval calculation (default: 0.95 for 95%% CI).",
     )
     # New arguments
     parser.add_argument("--sample", type=int, default=None, help="Randomly sample N tests to run instead of all tests.")
