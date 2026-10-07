@@ -37,6 +37,9 @@ class MetricsKeeper:
         for key, value in kwargs.items():
             self.window_sum[key] += value
 
+        self._expire_window(current_time)
+
+    def _expire_window(self, current_time):
         # Remove metrics that are outside the time window
         while self.window_metrics and self.window_metrics[0][0] < current_time - self.window:
             old_time, old_metrics = self.window_metrics.popleft()
@@ -53,6 +56,7 @@ class MetricsKeeper:
             str: Formatted metrics string as a table.
         """
         current_time = time.time()
+        self._expire_window(current_time)
         elapsed_time = current_time - self.start_time
         window_time = min(self.window, elapsed_time) if elapsed_time > 0 else 1  # Prevent division by zero
 
