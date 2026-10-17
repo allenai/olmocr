@@ -23,6 +23,10 @@
   </a>
 </p>
 
+<p align="center">
+  <b>English</b> · <a href="https://github.com/allenai/olmocr/blob/main/README.zh.md">简体中文</a>
+</p>
+
 A toolkit for converting PDFs and other image-based document formats into clean, readable, plain text format.
 
 Try the online demo: [https://olmocr.allenai.org/](https://olmocr.allenai.org/)
